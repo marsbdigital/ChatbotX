@@ -199,11 +199,12 @@ export const MESSENGER_SCOPES = [
   "page_events",
 ]
 
-/** Only the permissions needed to list a Page and receive/send Messenger messages. */
+/** Reviewer flow: Page messaging plus lookup in its explicitly configured business. */
 export const MESSENGER_MESSAGING_ONLY_SCOPES = [
   "pages_manage_metadata",
   "pages_messaging",
   "pages_show_list",
+  "business_management",
 ]
 
 /**
@@ -417,6 +418,7 @@ export async function getUserPages(
   userAccessToken: string,
   version: string = DEFAULT_API_VERSION,
   fallbackPageId?: string,
+  fallbackBusinessId?: string,
 ): Promise<{ pages: ConnectableFacebookPage[]; bmLookupFailed: boolean }> {
   const directPagesEndpoint = `${version}/me/accounts`
   const directPages = await rescue(directPagesEndpoint, () =>
@@ -471,11 +473,41 @@ export async function getUserPages(
       )
     }
   }
-  // for (const page of businessPagesResult.pages) {
-  //   if (!merged.has(page.id)) {
-  //     merged.set(page.id, { page, source: "business" })
-  //   }
-  // }
+  // The reviewer install may have access through its owning business rather
+  // than /me/accounts. Never enumerate other businesses or expose other Pages.
+  let bmLookupFailed = false
+  const selectedPage = fallbackPageId ? merged.get(fallbackPageId) : undefined
+  if (
+    fallbackPageId &&
+    fallbackBusinessId &&
+    NUMERIC_PAGE_ID.test(fallbackPageId) &&
+    NUMERIC_PAGE_ID.test(fallbackBusinessId) &&
+    !(
+      selectedPage &&
+      classifyConnectable(selectedPage.page, selectedPage.source).isConnectable
+    )
+  ) {
+    try {
+      const businessPages = await fetchAllPages<FacebookPage>(
+        `${version}/${fallbackBusinessId}/owned_pages`,
+        "id,name,access_token,category",
+        userAccessToken,
+      )
+      const page = businessPages.find(
+        (candidate) =>
+          candidate.id === fallbackPageId && candidate.access_token,
+      )
+      if (page) {
+        merged.set(page.id, { page, source: "business" })
+      }
+    } catch {
+      bmLookupFailed = true
+      logger.warn(
+        { businessId: fallbackBusinessId, pageId: fallbackPageId },
+        "Reviewer Business Manager Page lookup failed",
+      )
+    }
+  }
 
   const pages = sortConnectableFirst(
     Array.from(merged.values()).map(({ page, source }) =>
@@ -491,5 +523,5 @@ export async function getUserPages(
   //   logger.debug("No Business Manager pages found")
   // }
 
-  return { pages, bmLookupFailed: false }
+  return { pages, bmLookupFailed }
 }

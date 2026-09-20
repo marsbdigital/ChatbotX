@@ -37,6 +37,7 @@ export default async function MessengerSelectPage() {
     auth.userToken,
     auth.version,
     process.env.MESSENGER_REVIEW_PAGE_ID,
+    process.env.MESSENGER_REVIEW_BUSINESS_ID,
   )
 
   const allowedPages = process.env.MESSENGER_REVIEW_PAGE_ID

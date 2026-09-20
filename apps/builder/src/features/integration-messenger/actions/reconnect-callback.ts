@@ -68,6 +68,9 @@ export async function reconnectMessengerHandler(props: {
       process.env.MESSENGER_REVIEW_PAGE_ID === integrationMessenger.pageId
         ? integrationMessenger.pageId
         : undefined,
+      process.env.MESSENGER_REVIEW_PAGE_ID === integrationMessenger.pageId
+        ? process.env.MESSENGER_REVIEW_BUSINESS_ID
+        : undefined,
     )
     const page = pages.find(
       (userPage) =>

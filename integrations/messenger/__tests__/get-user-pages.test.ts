@@ -38,8 +38,8 @@ const directPage = {
   tasks: adminTasks,
 }
 
-// Business Manager lookup was disabled in #744 — getUserPages now returns
-// direct /me/accounts pages only and always reports bmLookupFailed: false.
+// General Business Manager enumeration remains disabled. Only a caller that
+// supplies both a known business and a known Page can use the reviewer fallback.
 describe("getUserPages", () => {
   beforeEach(() => {
     mockGet.mockReset()
@@ -183,6 +183,62 @@ describe("getUserPages", () => {
     const result = await getUserPages("user-token", "v23.0", "12345")
 
     expect(result.pages).toEqual([])
+  })
+
+  test("finds only the configured Page in the configured business", async () => {
+    const reviewerPage = {
+      id: "12345",
+      name: "Reviewer Page",
+      access_token: "reviewer-token",
+    }
+    mockGet
+      .mockResolvedValueOnce({ data: [] })
+      .mockRejectedValueOnce(new Error("not directly accessible"))
+      .mockResolvedValueOnce({
+        data: [
+          { id: "99999", name: "Other Page", access_token: "other-token" },
+          reviewerPage,
+        ],
+      })
+
+    const result = await getUserPages("user-token", "v23.0", "12345", "67890")
+
+    expect(result).toEqual({
+      pages: [{ ...reviewerPage, isConnectable: true }],
+      bmLookupFailed: false,
+    })
+    expect(mockGet.mock.calls.map((call) => call[0])).toEqual([
+      "v23.0/me/accounts",
+      "v23.0/12345",
+      "v23.0/67890/owned_pages",
+    ])
+  })
+
+  test("does not query a business without valid configured IDs", async () => {
+    mockGet
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [] })
+      .mockRejectedValueOnce(new Error("no direct Page"))
+
+    await getUserPages("user-token", "v23.0", "bad/page", "67890")
+    await getUserPages("user-token", "v23.0", "12345", "bad/business")
+
+    expect(mockGet.mock.calls.map((call) => call[0])).toEqual([
+      "v23.0/me/accounts",
+      "v23.0/me/accounts",
+      "v23.0/12345",
+    ])
+  })
+
+  test("reports a configured business lookup failure without exposing other Pages", async () => {
+    mockGet
+      .mockResolvedValueOnce({ data: [] })
+      .mockRejectedValueOnce(new Error("no direct Page"))
+      .mockRejectedValueOnce(new Error("business permission denied"))
+
+    const result = await getUserPages("user-token", "v23.0", "12345", "67890")
+
+    expect(result).toEqual({ pages: [], bmLookupFailed: true })
   })
 
   test("requests page fields with limit=100 and the user token", async () => {
