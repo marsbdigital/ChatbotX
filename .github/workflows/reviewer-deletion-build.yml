@@ -1,0 +1,61 @@
+name: Reviewer deletion image artifacts
+
+on:
+  push:
+    branches:
+      - fix/marsb-review-deletion-1.4.2
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reviewer-deletion-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [builder, worker]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify deployed source baseline
+        run: git merge-base --is-ancestor ade7af9118b9b1bf25455d3f9e7dc191a48e4833 HEAD
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image without registry push
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          set -euo pipefail
+          recipe="apps/${COMPONENT}/docker/Dockerfile"
+          if [ "$COMPONENT" = builder ]; then recipe="${recipe}.review"; fi
+          docker build --platform linux/amd64 \
+            --build-arg REVIEW_BUILD_HEAP_MB=8192 \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            -f "$recipe" -t "mbd-review-${COMPONENT}:${GITHUB_SHA}" .
+      - name: Verify image offline and export artifact
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          set -euo pipefail
+          mkdir -p image-artifact
+          tag="mbd-review-${COMPONENT}:${GITHUB_SHA}"
+          docker run --rm --network none --entrypoint node -i "$tag" --input-type=module - "$COMPONENT" \
+            < scripts/verify-review-image.mjs > image-artifact/verification.json
+          docker image inspect "$tag" > image-artifact/image-inspect.json
+          docker save "$tag" | gzip -1 > "image-artifact/${COMPONENT}.tar.gz"
+          (cd image-artifact && sha256sum "${COMPONENT}.tar.gz" > SHA256SUMS)
+          printf '%s\n' "$GITHUB_SHA" > image-artifact/source-commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reviewer-deletion-${{ matrix.component }}-${{ github.sha }}
+          path: image-artifact/
+          retention-days: 3
+          compression-level: 0

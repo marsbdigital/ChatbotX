@@ -24,6 +24,7 @@ import { prepareBroadcast } from "./handlers/prepare-broadcast"
 import { processBroadcastContacts } from "./handlers/process-broadcast-contacts"
 import { purgeAutomationThrottle } from "./handlers/purge-automation-throttle"
 import { purgeCoexistStaging } from "./handlers/purge-coexist-staging"
+import { purgeMessageCleanup } from "./handlers/purge-message-cleanup"
 import { purgeWhatsappSignupSessions } from "./handlers/purge-whatsapp-signup-sessions"
 import { purgeWorkspaces } from "./handlers/purge-workspaces"
 import { reconcileBroadcasts } from "./handlers/reconcile-broadcasts"
@@ -134,6 +135,12 @@ async function startScheduleWorker() {
 
             case ScheduleJobData.purgeWhatsappSignupSessions:
               await purgeWhatsappSignupSessions()
+              return
+
+            case ScheduleJobData.purgeMessageCleanup:
+              if (process.env.ENABLE_MESSAGE_CLEANUP_SCHEDULER === "true") {
+                await purgeMessageCleanup()
+              }
               return
 
             case ScheduleJobData.purgeWorkspaces:

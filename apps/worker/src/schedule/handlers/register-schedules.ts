@@ -281,6 +281,22 @@ export const registerSchedules = async () => {
     },
   )
 
+  // Explicit opt-in: deploying the code alone must not purge existing
+  // deleted-contact tombstones. Removing the scheduler when disabled matters
+  // because BullMQ keeps repeatable jobs in Redis across worker restarts.
+  if (process.env.ENABLE_MESSAGE_CLEANUP_SCHEDULER === "true") {
+    await scheduleQueue.upsertJobScheduler(
+      ScheduleJobData.purgeMessageCleanup,
+      { pattern: "*/5 * * * *" },
+      {
+        name: ScheduleJobData.purgeMessageCleanup,
+        data: { type: ScheduleJobData.purgeMessageCleanup, data: {} },
+      },
+    )
+  } else {
+    await scheduleQueue.removeJobScheduler(ScheduleJobData.purgeMessageCleanup)
+  }
+
   await scheduleQueue.upsertJobScheduler(
     ScheduleJobData.refreshChannelTokens,
     {

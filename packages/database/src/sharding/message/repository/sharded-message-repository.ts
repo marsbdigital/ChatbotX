@@ -971,6 +971,7 @@ export class ShardedMessageRepository implements IMessageRepository {
     contactInboxId,
     sinceTime,
     workspaceId,
+    beforeDeleteAttachments,
   }: HardDeleteAllByContactInboxParams): Promise<HardDeleteAllByContactInboxResult> {
     const shards = await this.getConversationReadShards(sinceTime, workspaceId)
     if (shards.length === 0) {
@@ -1008,17 +1009,22 @@ export class ShardedMessageRepository implements IMessageRepository {
           .from(attachmentModel)
           .where(and(...attachmentWhereConditions))
 
+        const paths = attachments.flatMap((attachment) =>
+          [attachment.originPath, attachment.thumbnailPath].filter(
+            (path): path is string => Boolean(path),
+          ),
+        )
+        if (beforeDeleteAttachments && paths.length > 0) {
+          await beforeDeleteAttachments([...new Set(paths)])
+        }
+
         await client
           .delete(attachmentModel)
           .where(and(...attachmentWhereConditions))
 
         await client.delete(messageModel).where(and(...messageWhereConditions))
 
-        return attachments.flatMap((attachment) =>
-          [attachment.originPath, attachment.thumbnailPath].filter(
-            (path): path is string => Boolean(path),
-          ),
-        )
+        return paths
       }),
     )
 

@@ -32,7 +32,7 @@ pre-commit:
 commit-msg:
   jobs:
     - run: |
-        MSG=$(cat {1})
+        MSG=$(cat "{1}")
         PATTERN='^(feat|fix|bugfix|refactor|docs|style|test|chore|ci|perf|build|revert)(\(.+\))?!?: .{1,100}$'
         if ! echo "$MSG" | grep -qE "$PATTERN"; then
           echo "❌ Invalid commit message format."

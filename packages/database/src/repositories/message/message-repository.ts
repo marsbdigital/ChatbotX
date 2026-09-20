@@ -131,6 +131,8 @@ export interface FindManyBySourceIdsParams {
 }
 
 export interface HardDeleteAllByContactInboxParams {
+  /** Optional erasure hook: fail before deleting DB rows if object cleanup fails. */
+  beforeDeleteAttachments?: (paths: string[]) => Promise<void>
   contactInboxId: string
   sinceTime: Date
   workspaceId: string

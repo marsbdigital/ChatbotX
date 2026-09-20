@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 const { mockUpsertJobScheduler, mockRemoveJobScheduler, envState } = vi.hoisted(
   () => ({
@@ -38,6 +38,7 @@ vi.mock("@chatbotx.io/worker-config", () => ({
     purgeWhatsappSignupSessions: "purgeWhatsappSignupSessions",
     purgeWorkspaces: "purgeWorkspaces",
     purgeAutomationThrottle: "purgeAutomationThrottle",
+    purgeMessageCleanup: "purgeMessageCleanup",
     refreshChannelTokens: "refreshChannelTokens",
     unsubscribeExpiredTrials: "unsubscribeExpiredTrials",
   },
@@ -60,11 +61,14 @@ const upsertedNames = () =>
   mockUpsertJobScheduler.mock.calls.map((call) => call[0] as string)
 
 beforeEach(() => {
+  vi.stubEnv("ENABLE_MESSAGE_CLEANUP_SCHEDULER", "false")
   vi.clearAllMocks()
 })
 
+afterEach(() => vi.unstubAllEnvs())
+
 describe("registerSchedules — edition gating", () => {
-  test("cloud registers the quota/trial schedulers and removes none", async () => {
+  test("cloud registers the quota/trial schedulers and removes the disabled cleanup scheduler", async () => {
     envState.NEXT_PUBLIC_EDITION = "cloud"
 
     await registerSchedules()
@@ -73,7 +77,7 @@ describe("registerSchedules — edition gating", () => {
     for (const name of CLOUD_ONLY) {
       expect(names).toContain(name)
     }
-    expect(mockRemoveJobScheduler).not.toHaveBeenCalled()
+    expect(mockRemoveJobScheduler).toHaveBeenCalledWith("purgeMessageCleanup")
   })
 
   test.each([
@@ -88,7 +92,7 @@ describe("registerSchedules — edition gating", () => {
     for (const name of CLOUD_ONLY) {
       expect(names).not.toContain(name)
     }
-    expect(mockRemoveJobScheduler).toHaveBeenCalledTimes(CLOUD_ONLY.length)
+    expect(mockRemoveJobScheduler).toHaveBeenCalledTimes(CLOUD_ONLY.length + 1)
     for (const name of CLOUD_ONLY) {
       expect(mockRemoveJobScheduler).toHaveBeenCalledWith(name)
     }
@@ -103,5 +107,24 @@ describe("registerSchedules — edition gating", () => {
     expect(names).toContain("purgeWorkspaces")
     expect(names).toContain("maintainMacPartitions")
     expect(names).toContain("enqueueBroadcast")
+  })
+  test("message cleanup requires an explicit opt-in", async () => {
+    await registerSchedules()
+    expect(upsertedNames()).not.toContain("purgeMessageCleanup")
+    expect(mockRemoveJobScheduler).toHaveBeenCalledWith("purgeMessageCleanup")
+    vi.clearAllMocks()
+    vi.stubEnv("ENABLE_MESSAGE_CLEANUP_SCHEDULER", "true")
+    await registerSchedules()
+    expect(mockUpsertJobScheduler).toHaveBeenCalledWith(
+      "purgeMessageCleanup",
+      { pattern: "*/5 * * * *" },
+      {
+        name: "purgeMessageCleanup",
+        data: { type: "purgeMessageCleanup", data: {} },
+      },
+    )
+    expect(mockRemoveJobScheduler).not.toHaveBeenCalledWith(
+      "purgeMessageCleanup",
+    )
   })
 })

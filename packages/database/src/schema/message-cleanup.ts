@@ -33,9 +33,9 @@ export const messageCleanupStatus = pgEnum(
  * gone by the time it runs. No column carries an FK — `workspaceId`,
  * `contactId`, `contactInboxId`, and `conversationIds` all reference rows that
  * are deleted (or being deleted) by the time this row is written, and the
- * table must outlive them. If the contact is re-created (same inbox + platform
- * sourceId), the matching row is removed so the returning contact keeps their
- * history.
+ * table must outlive them. Each deleted contact-inbox has its own tombstone:
+ * a returning sender gets a new contact-inbox id, so repeated deletes cannot
+ * overwrite the shard identity needed to erase the earlier history.
  */
 export const messageCleanupModel = pgTable(
   "MessageCleanup",
@@ -61,13 +61,11 @@ export const messageCleanupModel = pgTable(
     processedAt: timestamp(timestampConfig),
   },
   (table) => [
-    // Same identity key as ContactInbox_inboxId_sourceId_key: re-deleting a
-    // re-created contact updates the existing row instead of inserting a new
-    // one, and contact re-creation can cancel the pending cleanup by key.
-    uniqueIndex("MessageCleanup_inboxId_sourceId_key").using(
+    // A sender can return with the same Page sourceId but a new contactInboxId.
+    // Keep both deletion records so every shard identity is purged.
+    uniqueIndex("MessageCleanup_contactInboxId_key").using(
       "btree",
-      table.inboxId.asc().nullsLast(),
-      table.sourceId.asc().nullsLast(),
+      table.contactInboxId.asc().nullsLast(),
     ),
     index("MessageCleanup_status_createdAt_idx").using(
       "btree",

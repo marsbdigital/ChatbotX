@@ -6,7 +6,9 @@ import {
   eq,
   inArray,
   liftDecompressionLimit,
+  lt,
   lte,
+  or,
   sql,
 } from "@chatbotx.io/database/client"
 import { messageCleanupStatuses } from "@chatbotx.io/database/partials"
@@ -32,14 +34,17 @@ export type MessageCleanupEntry = {
 
 // Concurrent multi-row upserts/deletes on the same unique key must lock rows
 // in a consistent order, or overlapping batches can deadlock.
-const byInboxSourceKey = (
-  a: { inboxId: string; sourceId: string },
-  b: { inboxId: string; sourceId: string },
-): number =>
-  a.inboxId.localeCompare(b.inboxId) || a.sourceId.localeCompare(b.sourceId)
+const byContactInboxId = (
+  a: { contactInboxId: string },
+  b: { contactInboxId: string },
+): number => a.contactInboxId.localeCompare(b.contactInboxId)
 
 const PROCESS_DEFAULT_LIMIT = 100
 const CONVERSATION_DELETE_BATCH_SIZE = 100
+const MAX_ATTEMPTS = 10
+const FAILED_RETRY_DELAY_MS = 30 * 60 * 1000
+const STALE_PROCESSING_DELAY_MS = 60 * 60 * 1000
+const CLAIM_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000
 
 /**
  * Tracks Message/Attachment rows orphaned by contact deletes.
@@ -47,15 +52,14 @@ const CONVERSATION_DELETE_BATCH_SIZE = 100
  * Message/Attachment are compressed TimescaleDB hypertables with no FKs, so a
  * contact delete leaves their rows behind and records one tombstone per
  * deleted contact-inbox here. The actual purge (`processPending`) is
- * implemented but intentionally not wired to any queue or cron yet.
+ * scheduled by the worker only when its explicit rollout flag is enabled.
  */
 class MessageCleanupService extends BaseService {
   /**
    * Upserts one tombstone per deleted contact-inbox. Must run in the same
    * transaction as the contact delete so tombstones and deletes can never
-   * diverge. Re-deleting a re-created contact updates the existing
-   * `(inboxId, sourceId)` row: conversation ids are merged, the time window is
-   * widened, and the row is reset to `pending`.
+   * diverge. Repeating the same deleted contact-inbox updates its existing
+   * tombstone, but a re-created contact gets its own shard identity and row.
    */
   async record(props: {
     workspaceId: string
@@ -70,7 +74,7 @@ class MessageCleanupService extends BaseService {
     await tx
       .insert(messageCleanupModel)
       .values(
-        [...entries].sort(byInboxSourceKey).map((entry) => ({
+        [...entries].sort(byContactInboxId).map((entry) => ({
           workspaceId,
           contactId: entry.contactId,
           contactInboxId: entry.contactInboxId,
@@ -81,10 +85,9 @@ class MessageCleanupService extends BaseService {
         })),
       )
       .onConflictDoUpdate({
-        target: [messageCleanupModel.inboxId, messageCleanupModel.sourceId],
+        target: [messageCleanupModel.contactInboxId],
         set: {
           contactId: sql`excluded."contactId"`,
-          contactInboxId: sql`excluded."contactInboxId"`,
           conversationIds: sql`(
             select coalesce(jsonb_agg(distinct value), '[]'::jsonb)
             from jsonb_array_elements_text(
@@ -103,10 +106,9 @@ class MessageCleanupService extends BaseService {
   }
 
   /**
-   * Cancels pending cleanups for contacts that were re-created (same inbox +
-   * platform sourceId), so the returning contact keeps their old history. Call
-   * from every code path that inserts a `ContactInbox`, inside the same
-   * transaction when one is available.
+   * Legacy behavior: a returning contact keeps old history. For installations
+   * where Delete Contact is an erasure operation, leave tombstones intact; a
+   * new contact-inbox has a different id, so its new messages are unaffected.
    */
   async cancelByInboxSource(props: {
     inboxId: string
@@ -114,6 +116,9 @@ class MessageCleanupService extends BaseService {
     tx?: DatabaseClient
   }): Promise<void> {
     const { inboxId, sourceIds, tx = db } = props
+    if (process.env.ENABLE_PERMANENT_CONTACT_ERASURE === "true") {
+      return
+    }
     if (sourceIds.length === 0) {
       return
     }
@@ -131,59 +136,88 @@ class MessageCleanupService extends BaseService {
   /**
    * Purges the orphaned messages/attachments recorded by `record`.
    *
-   * NOT WIRED YET — no queue, cron, or caller invokes this on purpose; it will
-   * be scheduled by an upcoming feature. Kept implemented (and unit-testable)
-   * so the wiring change stays trivial.
+   * A failed object-store operation is retried after a delay. A processing row
+   * left by a crashed worker is eligible again after an hour; every delete is
+   * bounded to the original contact's IDs and deletion timestamp.
    */
   async processPending(props?: { limit?: number }): Promise<{
     processed: number
     failed: number
   }> {
     const limit = props?.limit ?? PROCESS_DEFAULT_LIMIT
-
-    // Claim rows first so concurrent processors never double-purge.
-    const claimed = await db.transaction(async (tx) => {
-      const rows = await tx
-        .select()
-        .from(messageCleanupModel)
-        .where(eq(messageCleanupModel.status, "pending"))
-        .orderBy(asc(messageCleanupModel.createdAt))
-        .limit(limit)
-        .for("update", { skipLocked: true })
-
-      if (rows.length === 0) {
-        return []
-      }
-
-      await tx
-        .update(messageCleanupModel)
-        .set({ status: messageCleanupStatuses.enum.processing })
-        .where(
-          inArray(
-            messageCleanupModel.id,
-            rows.map((row) => row.id),
-          ),
-        )
-
-      return rows
-    })
+    const retryAfter = new Date(Date.now() - FAILED_RETRY_DELAY_MS)
+    const staleAfter = new Date(Date.now() - STALE_PROCESSING_DELAY_MS)
 
     let processed = 0
     let failed = 0
-    for (const row of claimed) {
+    for (let i = 0; i < limit; i += 1) {
+      // Claim each row immediately before purging it. Claiming an entire batch
+      // would make later rows look stale while they wait behind earlier work.
+      const row = await db.transaction(async (tx) => {
+        const [next] = await tx
+          .select()
+          .from(messageCleanupModel)
+          .where(
+            or(
+              eq(messageCleanupModel.status, "pending"),
+              and(
+                eq(messageCleanupModel.status, "failed"),
+                lt(messageCleanupModel.attempts, MAX_ATTEMPTS),
+                lte(messageCleanupModel.updatedAt, retryAfter),
+              ),
+              and(
+                eq(messageCleanupModel.status, "processing"),
+                lt(messageCleanupModel.attempts, MAX_ATTEMPTS),
+                lte(messageCleanupModel.updatedAt, staleAfter),
+              ),
+            ),
+          )
+          .orderBy(asc(messageCleanupModel.createdAt))
+          .limit(1)
+          .for("update", { skipLocked: true })
+
+        if (!next) {
+          return null
+        }
+
+        const [claimed] = await tx
+          .update(messageCleanupModel)
+          .set({
+            status: messageCleanupStatuses.enum.processing,
+            attempts: sql`${messageCleanupModel.attempts} + 1`,
+            updatedAt: new Date(),
+          })
+          .where(eq(messageCleanupModel.id, next.id))
+          .returning()
+        return claimed ?? null
+      })
+
+      if (!row) {
+        break
+      }
+
+      const claim = { updatedAt: row.updatedAt }
+      const ownsClaim = () =>
+        and(
+          eq(messageCleanupModel.id, row.id),
+          eq(messageCleanupModel.status, "processing"),
+          eq(messageCleanupModel.updatedAt, claim.updatedAt),
+        )
       try {
-        await this.purgeRow(row)
-        await db
+        await this.purgeWithHeartbeat(row, claim)
+        const completed = await db
           .update(messageCleanupModel)
           .set({
             status: messageCleanupStatuses.enum.completed,
             processedAt: new Date(),
             lastError: null,
           })
-          .where(eq(messageCleanupModel.id, row.id))
-        processed += 1
+          .where(ownsClaim())
+          .returning({ id: messageCleanupModel.id })
+        if (completed.length > 0) {
+          processed += 1
+        }
       } catch (error) {
-        failed += 1
         logger.error(
           {
             err: error,
@@ -192,23 +226,73 @@ class MessageCleanupService extends BaseService {
           },
           "Message cleanup purge failed",
         )
-        await db
+        const markedFailed = await db
           .update(messageCleanupModel)
           .set({
             status: messageCleanupStatuses.enum.failed,
-            attempts: row.attempts + 1,
             lastError: error instanceof Error ? error.message : String(error),
           })
-          .where(eq(messageCleanupModel.id, row.id))
+          .where(ownsClaim())
+          .returning({ id: messageCleanupModel.id })
+        if (markedFailed.length > 0) {
+          failed += 1
+        }
       }
     }
 
     return { processed, failed }
   }
 
-  private async purgeRow(row: MessageCleanupModel): Promise<void> {
-    const attachmentPaths: string[] = []
+  private async purgeWithHeartbeat(
+    row: MessageCleanupModel,
+    claim: { updatedAt: Date },
+  ): Promise<void> {
+    // A slow object store or large shard purge must not make a healthy worker
+    // appear crashed. Keep its lease fresh, but let the original worker lose
+    // ownership if another worker already recovered a genuinely stale claim.
+    let heartbeatError: unknown = null
+    let renewal = Promise.resolve()
+    const timer = setInterval(() => {
+      renewal = renewal
+        .then(async () => {
+          if (heartbeatError) {
+            return
+          }
+          const [renewed] = await db
+            .update(messageCleanupModel)
+            .set({ updatedAt: new Date() })
+            .where(
+              and(
+                eq(messageCleanupModel.id, row.id),
+                eq(messageCleanupModel.status, "processing"),
+                eq(messageCleanupModel.updatedAt, claim.updatedAt),
+              ),
+            )
+            .returning({ updatedAt: messageCleanupModel.updatedAt })
+          if (!renewed) {
+            throw new Error(
+              `Message cleanup claim ${row.id} is no longer owned`,
+            )
+          }
+          claim.updatedAt = renewed.updatedAt
+        })
+        .catch((error: unknown) => {
+          heartbeatError = error
+        })
+    }, CLAIM_HEARTBEAT_INTERVAL_MS)
 
+    try {
+      await this.purgeRow(row)
+    } finally {
+      clearInterval(timer)
+      await renewal
+    }
+    if (heartbeatError) {
+      throw heartbeatError
+    }
+  }
+
+  private async purgeRow(row: MessageCleanupModel): Promise<void> {
     // Main-DB hypertables: bound every statement by conversationId (the
     // compression segmentby column) and by the delete moment, so a re-created
     // contact's newer rows can never be swept up. `liftDecompressionLimit`
@@ -237,12 +321,15 @@ class MessageCleanupService extends BaseService {
               lte(attachmentModel.createdAt, row.deletedAt),
             ),
           )
-        for (const attachment of attachments) {
-          attachmentPaths.push(attachment.originPath)
-          if (attachment.thumbnailPath) {
-            attachmentPaths.push(attachment.thumbnailPath)
-          }
-        }
+        const paths = attachments.flatMap((attachment) =>
+          [attachment.originPath, attachment.thumbnailPath].filter(
+            (path): path is string => Boolean(path),
+          ),
+        )
+        // Keep the DB rows available for a retry if an object deletion fails.
+        await Promise.all(
+          [...new Set(paths)].map((path) => uploader.deleteObject(path)),
+        )
 
         await tx
           .delete(messageModel)
@@ -265,24 +352,14 @@ class MessageCleanupService extends BaseService {
 
     // Shard DBs: the deleted contact-inbox id can never be re-assigned, so the
     // sinceTime lower bound is enough.
-    const shardResult = await messageService.hardDeleteAllByContactInbox({
+    await messageService.hardDeleteAllByContactInbox({
       contactInboxId: row.contactInboxId,
       sinceTime: row.sinceTime ?? row.createdAt,
       workspaceId: row.workspaceId,
+      beforeDeleteAttachments: async (paths) => {
+        await Promise.all(paths.map((path) => uploader.deleteObject(path)))
+      },
     })
-    attachmentPaths.push(...shardResult.attachmentPaths)
-
-    const deleteResults = await Promise.allSettled(
-      attachmentPaths.map((path) => uploader.deleteObject(path)),
-    )
-    for (const result of deleteResults) {
-      if (result.status === "rejected") {
-        logger.warn(
-          { err: result.reason, messageCleanupId: row.id },
-          "Message cleanup attachment file deletion failed",
-        )
-      }
-    }
   }
 }
 

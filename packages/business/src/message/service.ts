@@ -145,6 +145,7 @@ class MessageService extends BaseService {
     contactInboxId: string
     sinceTime: Date
     workspaceId: string
+    beforeDeleteAttachments?: (paths: string[]) => Promise<void>
   }): Promise<{ attachmentPaths: string[] }> {
     const { tx = db, ...params } = props
     const repo = await createMessageRepository(tx)

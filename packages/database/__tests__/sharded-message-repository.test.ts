@@ -1074,6 +1074,37 @@ describe("ShardedMessageRepository.hardDeleteAllByContactInbox", () => {
       }),
     ).rejects.toThrow("Message shard operation failed")
   })
+
+  test("does not remove shard rows when attachment-object cleanup fails", async () => {
+    const shardClient = makeHardDeleteShardClient()
+    shardClient.attachmentSelectChain.where.mockResolvedValue([
+      { originPath: "attachments/original.png", thumbnailPath: null },
+    ])
+    const shard = makeShardInfo("tr:s1", "s1")
+    const shardManager = {
+      getShardsForTimeRange: vi.fn().mockResolvedValue([shard]),
+      getWriteShardInfo: vi.fn().mockResolvedValue(null),
+      getShardClient: vi.fn().mockResolvedValue(shardClient),
+    }
+    const beforeDeleteAttachments = vi
+      .fn()
+      .mockRejectedValue(new Error("object storage unavailable"))
+    const localRepo = new ShardedMessageRepository(shardManager as never)
+
+    await expect(
+      localRepo.hardDeleteAllByContactInbox({
+        contactInboxId: "ci-1",
+        workspaceId: "ws-1",
+        sinceTime: new Date("2026-06-01T00:00:00Z"),
+        beforeDeleteAttachments,
+      }),
+    ).rejects.toThrow("Message shard operation failed")
+
+    expect(beforeDeleteAttachments).toHaveBeenCalledWith([
+      "attachments/original.png",
+    ])
+    expect(shardClient.delete).not.toHaveBeenCalled()
+  })
 })
 
 describe("ShardedMessageRepository.findById", () => {
