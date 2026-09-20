@@ -1,7 +1,9 @@
 name: Reviewer Messenger builder image
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - fix/messenger-review-scopes-1-4-2
 
 permissions:
   contents: read
@@ -14,9 +16,11 @@ jobs:
     steps:
       - name: Check out pinned reviewer branch
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
 
       - name: Verify v1.4.2 source base
-        run: test "$(git rev-parse HEAD^)" = "54c1287b788d07082b9a1456e1b511dee2661adb"
+        run: test "$(git rev-parse HEAD~2)" = "54c1287b788d07082b9a1456e1b511dee2661adb"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
