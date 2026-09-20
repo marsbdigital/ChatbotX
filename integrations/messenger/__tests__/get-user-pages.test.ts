@@ -131,6 +131,20 @@ describe("getUserPages", () => {
     ])
   })
 
+  test("accepts a Page with a messaging task and Page token", async () => {
+    const messagingPage = {
+      id: "page-messaging",
+      name: "Messaging Page",
+      access_token: "page-token",
+      tasks: ["MESSAGING"],
+    }
+    mockGet.mockResolvedValueOnce({ data: [messagingPage] })
+
+    const result = await getUserPages("user-token")
+
+    expect(result.pages).toEqual([{ ...messagingPage, isConnectable: true }])
+  })
+
   test("requests page fields with limit=100 and the user token", async () => {
     mockGet.mockResolvedValueOnce({ data: [directPage] })
 

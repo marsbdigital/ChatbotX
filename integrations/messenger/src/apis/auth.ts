@@ -140,6 +140,18 @@ function hasAllAdminTasks(tasks?: string[]): boolean {
   return ADMIN_PAGE_TASKS.every((task) => tasks.includes(task))
 }
 
+function hasMessagingTask(tasks?: string[]): boolean {
+  return Boolean(
+    tasks?.some((task) =>
+      [
+        "MESSAGING",
+        "PROFILE_PLUS_MESSAGING",
+        "PROFILE_PLUS_FULL_CONTROL",
+      ].includes(task),
+    ),
+  )
+}
+
 function classifyConnectable(
   page: FacebookPage,
   source: FacebookPageSource,
@@ -150,7 +162,8 @@ function classifyConnectable(
     ...page,
     isConnectable:
       source === "direct"
-        ? hasAccessToken && hasAllAdminTasks(page.tasks)
+        ? hasAccessToken &&
+          (hasAllAdminTasks(page.tasks) || hasMessagingTask(page.tasks))
         : hasAccessToken,
   }
 }
