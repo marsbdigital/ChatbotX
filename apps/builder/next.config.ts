@@ -4,18 +4,6 @@ import { env } from "@/env"
 
 const withNextIntl = createNextIntlPlugin({
   experimental: {
-    // Optional packaging profile for the isolated reviewer image. Keep its
-    // compilers serial and avoid duplicate Webpack string/buffer caches.
-    ...(process.env.CHATBOTX_LOW_MEMORY_BUILD === "true"
-      ? {
-          cpus: 1,
-          webpackBuildWorker: true,
-          webpackMemoryOptimizations: true,
-          parallelServerCompiles: false,
-          parallelServerBuildTraces: false,
-          staticGenerationMaxConcurrency: 1,
-        }
-      : {}),
     createMessagesDeclaration: "./messages/en.json",
   },
 })

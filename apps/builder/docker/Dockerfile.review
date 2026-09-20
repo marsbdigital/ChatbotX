@@ -17,7 +17,7 @@ RUN turbo prune builder --docker
 
 # Install dependencies
 FROM base AS deps
-ARG REVIEW_BUILD_HEAP_MB=3584
+ARG REVIEW_BUILD_HEAP_MB=8192
 ENV NODE_OPTIONS="--max-old-space-size=${REVIEW_BUILD_HEAP_MB}"
 
 WORKDIR /app
@@ -55,7 +55,7 @@ RUN --mount=type=cache,target=/app/apps/builder/.next/cache \
   --mount=type=secret,id=TURBO_API,env=TURBO_API \
   --mount=type=secret,id=TURBO_TOKEN,env=TURBO_TOKEN \
   --mount=type=secret,id=TURBO_TEAM,env=TURBO_TEAM \
-  CHATBOTX_LOW_MEMORY_BUILD=true RAYON_NUM_THREADS=2 SKIP_ENV_CHECK=true NEXT_TELEMETRY_DISABLED=1 pnpm --filter builder build --webpack
+  RAYON_NUM_THREADS=2 SKIP_ENV_CHECK=true NEXT_TELEMETRY_DISABLED=1 pnpm --filter builder build
 
 # Standalone image has no pnpm workspace; bundle a tiny migration runner (drizzle-orm + pg only).
 RUN apt-get update && apt-get install -y --no-install-recommends jq \
