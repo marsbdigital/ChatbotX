@@ -9,6 +9,7 @@ import type { WorkspaceModel } from "@chatbotx.io/database/types"
 import { generateAuthUrl } from "@chatbotx.io/integration-messenger"
 import { zodBigintAsString } from "@chatbotx.io/utils"
 import { redirect } from "next/navigation"
+import { getMessengerOAuthScopeMode } from "@/features/integration-messenger/libs/oauth"
 import { getOriginUrlFromHeader } from "@/lib/domain"
 import { resolveOwnerForWorkspace } from "@/lib/platform-credential-owner"
 import { buildProviderCallbackUrl } from "@/lib/provider-origin"
@@ -62,6 +63,7 @@ export const reconnectMessengerAction = workspaceActionClient
         clientId: messengerCredential.config.clientId,
         version: messengerCredential.config.version,
         redirectUrl,
+        scopeMode: getMessengerOAuthScopeMode(),
         stateParams: {
           workspaceId,
           referer,

@@ -1,0 +1,43 @@
+name: Reviewer Messenger builder image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  builder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out pinned reviewer branch
+        uses: actions/checkout@v4
+
+      - name: Verify v1.4.2 source base
+        run: test "$(git rev-parse HEAD^)" = "54c1287b788d07082b9a1456e1b511dee2661adb"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push reviewer builder only
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./apps/builder/docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/marsbdigital/chatbotx-review-builder:messenger-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=reviewer-builder
+          cache-to: type=gha,scope=reviewer-builder,mode=min

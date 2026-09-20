@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { beforeEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 type ReconnectActionArgs = {
   bindArgsParsedInputs: [string, string]
@@ -146,8 +146,11 @@ const executeZaloReconnect = () =>
   })
 
 describe("reconnectMessengerAction", () => {
+  afterEach(() => vi.unstubAllEnvs())
+
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubEnv("MESSENGER_OAUTH_SCOPE_MODE", "")
     mockResolveForOwner.mockResolvedValue({
       userId: null,
       config: {
@@ -172,6 +175,7 @@ describe("reconnectMessengerAction", () => {
       clientId: "client-1",
       version: "v23.0",
       redirectUrl: "https://broker.example.com/integrations/messenger/callback",
+      scopeMode: "full",
       stateParams: {
         workspaceId: "ws-1",
         referer:
@@ -180,6 +184,20 @@ describe("reconnectMessengerAction", () => {
       },
     })
     expect(mockRedirect).toHaveBeenCalledWith("https://facebook.example/auth")
+  })
+
+  test("requests messaging-only scopes on the isolated review deployment", async () => {
+    vi.stubEnv("MESSENGER_OAUTH_SCOPE_MODE", "messaging-only")
+    mockFindMessengerIntegration.mockResolvedValue({
+      id: "im-1",
+      pageId: "page-1",
+    })
+
+    await executeMessengerReconnect()
+
+    expect(mockGenerateMessengerAuthUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ scopeMode: "messaging-only" }),
+    )
   })
 
   test("throws when the integration does not exist in the workspace", async () => {

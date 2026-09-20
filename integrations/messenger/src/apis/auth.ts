@@ -185,6 +185,13 @@ export const MESSENGER_SCOPES = [
   "page_events",
 ]
 
+/** Only the permissions needed to list a Page and receive/send Messenger messages. */
+export const MESSENGER_MESSAGING_ONLY_SCOPES = [
+  "pages_manage_metadata",
+  "pages_messaging",
+  "pages_show_list",
+]
+
 /**
  * `MESSENGER_SCOPES` minus the two identity-only scopes (`email`,
  * `public_profile` are not Graph permissions and are implicitly present on
@@ -218,17 +225,22 @@ export function generateAuthUrl({
   version = DEFAULT_API_VERSION,
   redirectUrl,
   stateParams,
+  scopeMode = "full",
 }: {
   clientId: string
   version?: string
   redirectUrl: string
   stateParams?: Record<string, unknown>
+  scopeMode?: "full" | "messaging-only"
 }): string {
   const params = new URLSearchParams({
     auth_type: "rerequest",
     client_id: clientId,
     redirect_uri: redirectUrl,
-    scope: MESSENGER_SCOPES.join(","),
+    scope: (scopeMode === "messaging-only"
+      ? MESSENGER_MESSAGING_ONLY_SCOPES
+      : MESSENGER_SCOPES
+    ).join(","),
     response_type: "code",
     state: Buffer.from(JSON.stringify(stateParams ?? {})).toString("base64"),
   })

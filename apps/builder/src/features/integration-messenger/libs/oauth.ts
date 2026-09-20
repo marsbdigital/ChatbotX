@@ -3,6 +3,13 @@ import { generateAuthUrl } from "@chatbotx.io/integration-messenger"
 import { getOriginFromHeader } from "@/lib/domain"
 import { buildProviderCallbackUrl } from "@/lib/provider-origin"
 
+/** Opt in only on a dedicated, messaging-only deployment. */
+export function getMessengerOAuthScopeMode(): "full" | "messaging-only" {
+  return process.env.MESSENGER_OAUTH_SCOPE_MODE === "messaging-only"
+    ? "messaging-only"
+    : "full"
+}
+
 /**
  * Where a Messenger OAuth flow returns the user once tokens are stored — the
  * workspace's space if known, otherwise the current origin. Shared by the
@@ -39,6 +46,7 @@ export async function generateMessengerRedirectUri(
     clientId: credential.publicConfig.clientId,
     version: credential.publicConfig.version,
     redirectUrl,
+    scopeMode: getMessengerOAuthScopeMode(),
     stateParams: {
       workspaceId,
       referer,
