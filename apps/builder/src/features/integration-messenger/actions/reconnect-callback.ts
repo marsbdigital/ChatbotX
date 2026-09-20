@@ -65,6 +65,9 @@ export async function reconnectMessengerHandler(props: {
     const { pages } = await getUserPages(
       userToken,
       props.credentialConfig.version,
+      process.env.MESSENGER_REVIEW_PAGE_ID === integrationMessenger.pageId
+        ? integrationMessenger.pageId
+        : undefined,
     )
     const page = pages.find(
       (userPage) =>

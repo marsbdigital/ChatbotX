@@ -36,14 +36,19 @@ export default async function MessengerSelectPage() {
   const { pages, bmLookupFailed } = await getUserPages(
     auth.userToken,
     auth.version,
+    process.env.MESSENGER_REVIEW_PAGE_ID,
   )
+
+  const allowedPages = process.env.MESSENGER_REVIEW_PAGE_ID
+    ? pages.filter((page) => page.id === process.env.MESSENGER_REVIEW_PAGE_ID)
+    : pages
 
   const connectedPageIds = new Set(
     await messengerIntegrationService.findConnectedPageIds(
-      pages.map((page) => page.id),
+      allowedPages.map((page) => page.id),
     ),
   )
-  const pickerPages: PickerFacebookPage[] = pages
+  const pickerPages: PickerFacebookPage[] = allowedPages
     .map((page) => ({
       ...page,
       isAlreadyConnected: connectedPageIds.has(page.id),

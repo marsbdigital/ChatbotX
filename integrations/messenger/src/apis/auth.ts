@@ -16,6 +16,7 @@ type SourcedFacebookPage = {
 const MAX_PAGES = 20
 const GRAPH_PAGE_LIMIT = 100
 const BUSINESS_PAGE_BATCH_SIZE = 5
+const NUMERIC_PAGE_ID = /^\d+$/
 const ADMIN_PAGE_TASKS = [
   "ADVERTISE",
   "ANALYZE",
@@ -415,6 +416,7 @@ export function getFacebookUser(
 export async function getUserPages(
   userAccessToken: string,
   version: string = DEFAULT_API_VERSION,
+  fallbackPageId?: string,
 ): Promise<{ pages: ConnectableFacebookPage[]; bmLookupFailed: boolean }> {
   const directPagesEndpoint = `${version}/me/accounts`
   const directPages = await rescue(directPagesEndpoint, () =>
@@ -433,6 +435,41 @@ export async function getUserPages(
   const merged = new Map<string, SourcedFacebookPage>()
   for (const page of directPages) {
     merged.set(page.id, { page, source: "direct" })
+  }
+  // A business-owned Page selected during OAuth can be absent from
+  // /me/accounts. Meta also supports retrieving a known Page's token by ID.
+  // This fallback is opt-in and limited to the caller's explicit Page ID.
+  const existingKnownPage = fallbackPageId
+    ? merged.get(fallbackPageId)
+    : undefined
+  const knownPageIsConnectable = existingKnownPage
+    ? classifyConnectable(existingKnownPage.page, existingKnownPage.source)
+        .isConnectable
+    : false
+  if (
+    fallbackPageId &&
+    NUMERIC_PAGE_ID.test(fallbackPageId) &&
+    !knownPageIsConnectable
+  ) {
+    try {
+      const page = await facebookGraphClient.get<FacebookPage>(
+        `${version}/${fallbackPageId}`,
+        {
+          searchParams: {
+            fields: "id,name,access_token,tasks",
+            access_token: userAccessToken,
+          },
+        },
+      )
+      if (page.id === fallbackPageId && page.access_token) {
+        merged.set(page.id, { page, source: "direct" })
+      }
+    } catch {
+      logger.warn(
+        { pageId: fallbackPageId },
+        "Known Messenger Page lookup failed",
+      )
+    }
   }
   // for (const page of businessPagesResult.pages) {
   //   if (!merged.has(page.id)) {

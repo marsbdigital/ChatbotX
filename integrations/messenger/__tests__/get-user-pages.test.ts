@@ -145,6 +145,46 @@ describe("getUserPages", () => {
     expect(result.pages).toEqual([{ ...messagingPage, isConnectable: true }])
   })
 
+  test("retrieves only an explicitly known Page when /me/accounts is empty", async () => {
+    const knownPage = {
+      id: "12345",
+      name: "Known Page",
+      access_token: "page-token",
+      tasks: ["PROFILE_PLUS_MESSAGING"],
+    }
+    mockGet.mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce(knownPage)
+
+    const result = await getUserPages("user-token", "v23.0", "12345")
+
+    expect(result.pages).toEqual([{ ...knownPage, isConnectable: true }])
+    expect(mockGet).toHaveBeenLastCalledWith("v23.0/12345", {
+      searchParams: {
+        fields: "id,name,access_token,tasks",
+        access_token: "user-token",
+      },
+    })
+  })
+
+  test("does not query an invalid Page ID", async () => {
+    mockGet.mockResolvedValueOnce({ data: [] })
+
+    const result = await getUserPages("user-token", "v23.0", "other/page")
+
+    expect(result.pages).toEqual([])
+    expect(mockGet).toHaveBeenCalledTimes(1)
+  })
+
+  test("does not accept a different Page returned by the known-Page lookup", async () => {
+    mockGet.mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({
+      ...directPage,
+      id: "other-page",
+    })
+
+    const result = await getUserPages("user-token", "v23.0", "12345")
+
+    expect(result.pages).toEqual([])
+  })
+
   test("requests page fields with limit=100 and the user token", async () => {
     mockGet.mockResolvedValueOnce({ data: [directPage] })
 
