@@ -66,8 +66,19 @@ const buildDefaults = (helpItems: TenantHelpItemModel[]): TenantSettings => {
 }
 
 const getDefaultSettings = async (): Promise<TenantSettings> => {
-  const helpItems = await tenantHelpItemService.listByTenant(ROOT_TENANT_ID)
-  return buildDefaults(helpItems)
+  const [helpItems, rootTenant] = await Promise.all([
+    tenantHelpItemService.listByTenant(ROOT_TENANT_ID),
+    tenantService.findById(ROOT_TENANT_ID),
+  ])
+  const defaults = buildDefaults(helpItems)
+  // Operator legal disclosures also apply to community-edition sign-in.
+  // Keep licensed branding and executable customizations out of defaults.
+  return {
+    ...defaults,
+    policyUrl: rootTenant?.policyUrl ?? defaults.policyUrl,
+    termsOfServiceUrl:
+      rootTenant?.termsOfServiceUrl ?? defaults.termsOfServiceUrl,
+  }
 }
 
 /**

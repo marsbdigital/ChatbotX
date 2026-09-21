@@ -57,9 +57,60 @@ beforeEach(() => {
   mocks.env.NEXT_PUBLIC_STORAGE_URL = undefined
   mocks.env.FORCE_PUBLIC_HTTPS = false
   mocks.listByTenant.mockResolvedValue([])
+  mocks.findTenantById.mockReset().mockResolvedValue(null)
 })
 
 describe("resolveTenantSettingsByDomain", () => {
+  test("uses root legal links on community sign-in without enabling branding", async () => {
+    mocks.hasEnterpriseFeatures.mockResolvedValue(false)
+    mocks.findTenantById.mockResolvedValue({
+      id: "1",
+      policyUrl: "https://operator.example/privacy",
+      termsOfServiceUrl: "https://operator.example/terms",
+      brandName: "Licensed brand",
+      customJs: "alert('no')",
+      customCss: "body{}",
+    })
+
+    const settings = await resolveTenantSettingsByDomain(BUILDER_URL)
+
+    expect(mocks.findTenantById).toHaveBeenCalledWith("1")
+    expect(settings.policyUrl).toBe("https://operator.example/privacy")
+    expect(settings.termsOfServiceUrl).toBe("https://operator.example/terms")
+    expect(settings.name).toBe("ChatbotX")
+    expect(settings.customJS).toBeNull()
+    expect(settings.customCSS).toBeNull()
+    expect(mocks.findActiveByDomain).not.toHaveBeenCalled()
+  })
+
+  test("preserves default legal links when no root tenant exists", async () => {
+    mocks.hasEnterpriseFeatures.mockResolvedValue(false)
+
+    const settings = await resolveTenantSettingsByDomain(null)
+
+    expect(settings.policyUrl).toBe("https://chatbotx.io/privacy/")
+    expect(settings.termsOfServiceUrl).toBe("https://chatbotx.io/terms/")
+  })
+
+  test("keeps a custom tenant's legal links separate from the operator's", async () => {
+    mocks.hasEnterpriseFeatures.mockResolvedValue(true)
+    mocks.findActiveByDomain.mockResolvedValue({
+      domain: CUSTOM_DOMAIN,
+      tenantId: "tenant-1",
+    })
+    mocks.findTenantById.mockImplementation(async (id: string) => ({
+      id,
+      status: "active",
+      policyUrl: `https://${id === "1" ? "operator" : "customer"}.example/privacy`,
+      termsOfServiceUrl: `https://${id === "1" ? "operator" : "customer"}.example/terms`,
+    }))
+
+    const settings = await resolveTenantSettingsByDomain(CUSTOM_DOMAIN)
+
+    expect(settings.policyUrl).toBe("https://customer.example/privacy")
+    expect(settings.termsOfServiceUrl).toBe("https://customer.example/terms")
+  })
+
   test("anchors appUrl and wsUrl to the custom domain for an active white-label tenant", async () => {
     mocks.hasEnterpriseFeatures.mockResolvedValue(true)
     mocks.findActiveByDomain.mockResolvedValue({
