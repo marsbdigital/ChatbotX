@@ -19,6 +19,7 @@ import {
 } from "../webhook/datetime-webhook-scanner"
 import { enqueueBroadcast } from "./handlers/enqueue-broadcast"
 import { finalizeBroadcasts } from "./handlers/finalize-broadcasts"
+import { maintainCleanupReceipts } from "./handlers/maintain-cleanup-receipts"
 import { maintainMacPartitions } from "./handlers/maintain-mac-partitions"
 import { prepareBroadcast } from "./handlers/prepare-broadcast"
 import { processBroadcastContacts } from "./handlers/process-broadcast-contacts"
@@ -140,6 +141,12 @@ async function startScheduleWorker() {
             case ScheduleJobData.purgeMessageCleanup:
               if (process.env.ENABLE_MESSAGE_CLEANUP_SCHEDULER === "true") {
                 await purgeMessageCleanup()
+              }
+              return
+
+            case ScheduleJobData.maintainCleanupReceipts:
+              if (process.env.ENABLE_MESSAGE_CLEANUP_SCHEDULER === "true") {
+                await maintainCleanupReceipts()
               }
               return
 

@@ -5712,5 +5712,25 @@
   },
   "accountFields": {
     "title": "Kolom Bot"
+  },
+  "deletionJobs": {
+    "title": "Data deletion jobs",
+    "enabled": "Automatic deletion and receipt maintenance are enabled.",
+    "disabled": "Automatic deletion is disabled. Jobs remain queued.",
+    "instructions": "Check this page daily and after storage or database incidents. Resolve the underlying problem before retrying an exhausted job. Successful jobs leave a minimal receipt for 30 days; unfinished jobs are retained until resolved.",
+    "pending": "Queued",
+    "processing": "Processing",
+    "failed": "Failed",
+    "completed": "Legacy completed records",
+    "noFailures": "No failed or stale deletion jobs need attention.",
+    "job": "Job reference",
+    "workspace": "Workspace",
+    "status": "Status",
+    "attempts": "Attempts",
+    "updated": "Last update (UTC)",
+    "action": "Action",
+    "retry": "Retry deletion",
+    "automaticRetry": "Scheduled retry",
+    "limit": "Showing up to 100 failed or stale jobs, oldest first. Refresh to see updated status."
   }
 }

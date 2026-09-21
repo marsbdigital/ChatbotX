@@ -286,6 +286,14 @@ export const registerSchedules = async () => {
   // because BullMQ keeps repeatable jobs in Redis across worker restarts.
   if (process.env.ENABLE_MESSAGE_CLEANUP_SCHEDULER === "true") {
     await scheduleQueue.upsertJobScheduler(
+      ScheduleJobData.maintainCleanupReceipts,
+      { pattern: "*/5 * * * *" },
+      {
+        name: ScheduleJobData.maintainCleanupReceipts,
+        data: { type: ScheduleJobData.maintainCleanupReceipts, data: {} },
+      },
+    )
+    await scheduleQueue.upsertJobScheduler(
       ScheduleJobData.purgeMessageCleanup,
       { pattern: "*/5 * * * *" },
       {
@@ -295,6 +303,9 @@ export const registerSchedules = async () => {
     )
   } else {
     await scheduleQueue.removeJobScheduler(ScheduleJobData.purgeMessageCleanup)
+    await scheduleQueue.removeJobScheduler(
+      ScheduleJobData.maintainCleanupReceipts,
+    )
   }
 
   await scheduleQueue.upsertJobScheduler(

@@ -102,6 +102,7 @@ import { magicLinkRelations } from "./magic-link"
 import { mediaLibraryFileRelations } from "./media-library-file"
 import { mediaLibraryFolderRelations } from "./media-library-folder"
 import { messageRelations } from "./message"
+import { messageCleanupReceiptRelations } from "./message-cleanup-receipt"
 import { messagingAdOperationRelations } from "./messaging-ad-operation"
 import { messagingAdsConnectionRelations } from "./messaging-ads-connection"
 import { messengerMessageTemplateRelations } from "./messenger-message-template"
@@ -167,6 +168,7 @@ export const relations = {
   ...conversationRelations,
   ...couponRelations,
   ...messageRelations,
+  ...messageCleanupReceiptRelations,
   ...automatedResponseRelations,
   ...customDomainRelations,
   ...tenantRelations,

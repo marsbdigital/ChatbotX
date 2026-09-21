@@ -39,6 +39,7 @@ vi.mock("@chatbotx.io/worker-config", () => ({
     purgeWorkspaces: "purgeWorkspaces",
     purgeAutomationThrottle: "purgeAutomationThrottle",
     purgeMessageCleanup: "purgeMessageCleanup",
+    maintainCleanupReceipts: "maintainCleanupReceipts",
     refreshChannelTokens: "refreshChannelTokens",
     unsubscribeExpiredTrials: "unsubscribeExpiredTrials",
   },
@@ -92,7 +93,7 @@ describe("registerSchedules — edition gating", () => {
     for (const name of CLOUD_ONLY) {
       expect(names).not.toContain(name)
     }
-    expect(mockRemoveJobScheduler).toHaveBeenCalledTimes(CLOUD_ONLY.length + 1)
+    expect(mockRemoveJobScheduler).toHaveBeenCalledTimes(CLOUD_ONLY.length + 2)
     for (const name of CLOUD_ONLY) {
       expect(mockRemoveJobScheduler).toHaveBeenCalledWith(name)
     }
@@ -111,6 +112,10 @@ describe("registerSchedules — edition gating", () => {
   test("message cleanup requires an explicit opt-in", async () => {
     await registerSchedules()
     expect(upsertedNames()).not.toContain("purgeMessageCleanup")
+    expect(upsertedNames()).not.toContain("maintainCleanupReceipts")
+    expect(mockRemoveJobScheduler).toHaveBeenCalledWith(
+      "maintainCleanupReceipts",
+    )
     expect(mockRemoveJobScheduler).toHaveBeenCalledWith("purgeMessageCleanup")
     vi.clearAllMocks()
     vi.stubEnv("ENABLE_MESSAGE_CLEANUP_SCHEDULER", "true")
@@ -121,6 +126,14 @@ describe("registerSchedules — edition gating", () => {
       {
         name: "purgeMessageCleanup",
         data: { type: "purgeMessageCleanup", data: {} },
+      },
+    )
+    expect(mockUpsertJobScheduler).toHaveBeenCalledWith(
+      "maintainCleanupReceipts",
+      { pattern: "*/5 * * * *" },
+      {
+        name: "maintainCleanupReceipts",
+        data: { type: "maintainCleanupReceipts", data: {} },
       },
     )
     expect(mockRemoveJobScheduler).not.toHaveBeenCalledWith(

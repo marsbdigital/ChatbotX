@@ -192,6 +192,8 @@ export type InboxWithIntegrations = InboxModel & {
 export type ContactOnSmartDelayModel =
   typeof schema.contactOnSmartDelayModel.$inferSelect
 export type MessageCleanupModel = typeof schema.messageCleanupModel.$inferSelect
+export type MessageCleanupReceiptModel =
+  typeof schema.messageCleanupReceiptModel.$inferSelect
 export type MessagingAdOperationModel =
   typeof schema.messagingAdOperationModel.$inferSelect
 export type MessagingAdsConnectionModel =

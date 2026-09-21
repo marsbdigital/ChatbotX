@@ -36,6 +36,8 @@ export const messageCleanupStatus = pgEnum(
  * table must outlive them. Each deleted contact-inbox has its own tombstone:
  * a returning sender gets a new contact-inbox id, so repeated deletes cannot
  * overwrite the shard identity needed to erase the earlier history.
+ * Successful purges replace this identifying row with a separate, short-lived
+ * receipt. Unfinished rows remain available for retries and operator recovery.
  */
 export const messageCleanupModel = pgTable(
   "MessageCleanup",

@@ -15,7 +15,12 @@ const root =
   kind === "builder"
     ? "/app/apps/builder/.next/server"
     : "/app/apps/worker/dist"
-const required = ["ENABLE_PERMANENT_CONTACT_ERASURE", "Message cleanup claim"]
+const required = [
+  "ENABLE_PERMANENT_CONTACT_ERASURE",
+  "Message cleanup claim",
+  "MessageCleanupReceipt",
+  "PURGE_FAILED",
+]
 if (kind === "worker") {
   required.push("ENABLE_MESSAGE_CLEANUP_SCHEDULER")
 }
@@ -45,24 +50,30 @@ if (kind === "builder") {
     migrationsFolder: "/app/migrate-runner/drizzle",
   })
   const migrationName = "20260920231705_contact-inbox-cleanup-identity"
+  const receiptMigrationName = "20260921181857_minimal_cleanup_receipts"
   const baseline = migrations
-    .filter((m) => m.name !== migrationName)
+    .filter((m) => m.name !== migrationName && m.name !== receiptMigrationName)
     .sort((a, b) => a.name.localeCompare(b.name))
   const fingerprint = createHash("md5")
     .update(baseline.map((m) => `${m.name}:${m.hash}`).join("\n"))
     .digest("hex")
   assert.equal(baseline.length, 168)
   assert.equal(fingerprint, "753e8979b058da9be12c5bab53eace64")
-  assert.equal(migrations.length, 169)
+  assert.equal(migrations.length, 170)
   assert.equal(
     migrations.find((m) => m.name === migrationName)?.hash,
     "52d4b86418ec0dcebe9f90183d48b4eb1805f01992ba4588d45290acf3f1d940",
   )
+  assert.equal(
+    migrations.find((m) => m.name === receiptMigrationName)?.hash,
+    "908408babb0733f69c7769cb646631fd2da9f54042601050d0d311aea040aeac",
+  )
   Object.assign(result, {
     baselineMigrations: 168,
     baselineFingerprint: fingerprint,
-    totalMigrations: 169,
+    totalMigrations: 170,
     migrationName,
+    receiptMigrationName,
   })
 }
 console.log(JSON.stringify(result, null, 2))

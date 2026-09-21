@@ -9,6 +9,7 @@ import {
   contactModel,
   conversationModel,
   messageCleanupModel,
+  messageCleanupReceiptModel,
   messageModel,
 } from "@chatbotx.io/database/schema"
 import { uploader } from "@chatbotx.io/filesystem"
@@ -29,6 +30,7 @@ import { messageCleanupService } from "../../src/message-cleanup/service"
 // Never accepts a configurable production target.
 const enabled = process.env.MBD_SYNTHETIC_DELETION_TEST === "true"
 const fixtureTime = new Date("2026-01-01T00:00:00.000Z")
+const RECEIPT_UUID_PATTERN = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/
 let sequence = 1000
 
 describe.skipIf(!enabled)(
@@ -67,7 +69,7 @@ describe.skipIf(!enabled)(
       ).mockResolvedValue(undefined)
       vi.stubEnv("ENABLE_PERMANENT_CONTACT_ERASURE", "true")
       await db.execute(
-        sql`TRUNCATE "Contact", "ContactInbox", "Conversation", "Message", "Attachment", "MessageCleanup" CASCADE`,
+        sql`TRUNCATE "Contact", "ContactInbox", "Conversation", "Message", "Attachment", "MessageCleanup", "MessageCleanupReceipt" CASCADE`,
       )
     })
 
@@ -183,10 +185,7 @@ describe.skipIf(!enabled)(
           $metadata: { httpStatusCode: 404 },
         })
       }
-      expect(await tombstone(record.id)).toMatchObject({
-        status: "completed",
-        lastError: null,
-      })
+      expect(await tombstone(record.id)).toBeUndefined()
     }
 
     async function expectRetained(record: Awaited<ReturnType<typeof seed>>) {
@@ -260,7 +259,7 @@ describe.skipIf(!enabled)(
         .spyOn(uploader, "deleteObject")
         .mockImplementation(async (path) => {
           if (path === target.thumbnailPath) {
-            throw new Error("Synthetic object storage failure")
+            throw new Error(`Synthetic private object failure: ${path}`)
           }
           return await originalDelete(path)
         })
@@ -271,6 +270,7 @@ describe.skipIf(!enabled)(
       expect(await tombstone(target.id)).toMatchObject({
         status: "failed",
         attempts: 1,
+        lastError: "PURGE_FAILED",
       })
       expect(
         await db
@@ -301,7 +301,9 @@ describe.skipIf(!enabled)(
         failed: 0,
       })
       await expectErased(target)
-      expect(await tombstone(target.id)).toMatchObject({ attempts: 2 })
+      expect(await db.select().from(messageCleanupReceiptModel)).toEqual([
+        expect.objectContaining({ attempts: 2 }),
+      ])
     })
 
     test("concurrent processors claim each tombstone once", async () => {
@@ -322,7 +324,7 @@ describe.skipIf(!enabled)(
       )
       for (const record of records) {
         await expectErased(record)
-        expect(await tombstone(record.id)).toMatchObject({ attempts: 1 })
+        expect(await tombstone(record.id)).toBeUndefined()
       }
     })
 
@@ -434,7 +436,9 @@ describe.skipIf(!enabled)(
         failed: 0,
       })
       await expectErased(crashed)
-      expect(await tombstone(crashed.id)).toMatchObject({ attempts: 2 })
+      expect(await db.select().from(messageCleanupReceiptModel)).toEqual([
+        expect.objectContaining({ attempts: 2 }),
+      ])
       expect(await tombstone(active.id)).toMatchObject({
         status: "processing",
         attempts: 1,
@@ -507,7 +511,9 @@ describe.skipIf(!enabled)(
         failed: 0,
       })
       await expectErased(target)
-      expect(await tombstone(target.id)).toMatchObject({ attempts: 2 })
+      expect(await db.select().from(messageCleanupReceiptModel)).toEqual([
+        expect.objectContaining({ attempts: 2 }),
+      ])
     })
 
     test("returning sender cannot cancel old erasure and keeps its new history", async () => {
@@ -528,7 +534,7 @@ describe.skipIf(!enabled)(
       await expectErased(oldContact)
       await expectRetained(returning)
       await removeContact(returning)
-      expect(await db.select().from(messageCleanupModel)).toHaveLength(2)
+      expect(await db.select().from(messageCleanupModel)).toHaveLength(1)
       expect(await messageCleanupService.processPending()).toEqual({
         processed: 1,
         failed: 0,
@@ -556,7 +562,134 @@ describe.skipIf(!enabled)(
         status: "failed",
         attempts: 10,
       })
+      const status = await messageCleanupService.operatorStatus()
+      expect(status.jobs).toHaveLength(1)
+      expect(Object.keys(status.jobs[0]).sort()).toEqual([
+        "attempts",
+        "id",
+        "status",
+        "updatedAt",
+        "workspaceId",
+      ])
       await expect(uploader.headObject(target.path)).resolves.toBeDefined()
+      expect(await messageCleanupService.maintainReceipts()).toMatchObject({
+        exhausted: 1,
+      })
+      expect(await tombstone(target.id)).toMatchObject({
+        status: "failed",
+        attempts: 10,
+      })
+      const job = await tombstone(target.id)
+      expect(await messageCleanupService.retryExhausted(job.id)).toBe(true)
+      expect(await messageCleanupService.retryExhausted(job.id)).toBe(false)
+      expect(await tombstone(target.id)).toMatchObject({
+        status: "pending",
+        attempts: 0,
+        sourceId: target.sourceId,
+      })
+      expect(await messageCleanupService.processPending()).toEqual({
+        processed: 1,
+        failed: 0,
+      })
+      await expectErased(target)
+    })
+
+    test("successful deletion retains only a minimal receipt with a 30-day expiry", async () => {
+      const target = await seed()
+      await removeContact(target)
+      await messageCleanupService.processPending()
+      const [receipt] = await db.select().from(messageCleanupReceiptModel)
+      expect(receipt).toBeDefined()
+      expect(Object.keys(receipt).sort()).toEqual([
+        "attempts",
+        "completedAt",
+        "createdAt",
+        "expiresAt",
+        "id",
+        "implementationVersion",
+        "updatedAt",
+        "workspaceId",
+      ])
+      expect(receipt.id).toMatch(RECEIPT_UUID_PATTERN)
+      expect(receipt.expiresAt.getTime() - receipt.completedAt.getTime()).toBe(
+        30 * 24 * 60 * 60 * 1000,
+      )
+      expect(receipt.attempts).toBe(1)
+      expect(receipt.implementationVersion).toBe("mbd-erasure-v2")
+      await expectErased(target)
+    })
+
+    test("receipt insertion failure rolls back queue removal and retries idempotently", async () => {
+      const target = await seed()
+      await removeContact(target)
+      await db.execute(
+        sql.raw(`CREATE FUNCTION reject_test_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'Synthetic receipt failure'; END $$;
+        CREATE TRIGGER reject_test_receipt BEFORE INSERT ON "MessageCleanupReceipt" FOR EACH ROW EXECUTE FUNCTION reject_test_receipt();`),
+      )
+      try {
+        expect(await messageCleanupService.processPending()).toEqual({
+          processed: 0,
+          failed: 1,
+        })
+        expect(await tombstone(target.id)).toMatchObject({
+          status: "failed",
+          lastError: "PURGE_FAILED",
+        })
+        expect(await db.select().from(messageCleanupReceiptModel)).toEqual([])
+      } finally {
+        await db.execute(
+          sql.raw(
+            'DROP TRIGGER reject_test_receipt ON "MessageCleanupReceipt"; DROP FUNCTION reject_test_receipt();',
+          ),
+        )
+      }
+      await db
+        .update(messageCleanupModel)
+        .set({ updatedAt: fixtureTime })
+        .where(eq(messageCleanupModel.contactInboxId, target.id))
+      expect(await messageCleanupService.processPending()).toEqual({
+        processed: 1,
+        failed: 0,
+      })
+      await expectErased(target)
+      expect(await db.select().from(messageCleanupReceiptModel)).toHaveLength(1)
+    })
+
+    test("receipt maintenance expires old evidence, minimizes legacy completion and preserves unfinished work", async () => {
+      const completed = await seed()
+      const pending = await seed()
+      await removeContact(completed)
+      const legacy = await tombstone(completed.id)
+      await messageCleanupService.processPending()
+      await db
+        .insert(messageCleanupModel)
+        .values({ ...legacy, status: "completed", processedAt: new Date() })
+      await removeContact(pending)
+      await db.insert(messageCleanupReceiptModel).values({
+        workspaceId: "91001",
+        completedAt: fixtureTime,
+        expiresAt: fixtureTime,
+        attempts: 1,
+        implementationVersion: "synthetic-expired",
+      })
+      expect(await messageCleanupService.maintainReceipts()).toEqual({
+        minimized: 1,
+        expired: 1,
+        exhausted: 0,
+      })
+      expect(await tombstone(completed.id)).toBeUndefined()
+      expect(await tombstone(pending.id)).toMatchObject({ status: "pending" })
+      const receipts = await db.select().from(messageCleanupReceiptModel)
+      expect(receipts).toHaveLength(2)
+      expect(receipts.every((receipt) => receipt.expiresAt > new Date())).toBe(
+        true,
+      )
+      expect(await messageCleanupService.maintainReceipts()).toEqual({
+        minimized: 0,
+        expired: 0,
+        exhausted: 0,
+      })
+      await expect(uploader.headObject(pending.path)).resolves.toBeDefined()
     })
   },
 )

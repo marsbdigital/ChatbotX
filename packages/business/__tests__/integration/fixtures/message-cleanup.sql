@@ -189,3 +189,15 @@ SELECT create_hypertable('"Attachment"', 'createdAt', chunk_time_interval => INT
 ALTER TABLE "Attachment" SET (timescaledb.compress, timescaledb.compress_segmentby = '"conversationId"', timescaledb.compress_orderby = '"createdAt"');
 CREATE UNIQUE INDEX "MessageCleanup_contactInboxId_key" ON "MessageCleanup" ("contactInboxId");
 CREATE UNIQUE INDEX "ContactInbox_inboxId_sourceId_key" ON "ContactInbox" ("inboxId", "sourceId");
+CREATE TABLE "MessageCleanupReceipt" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "createdAt" timestamp(6) with time zone DEFAULT now() NOT NULL,
+  "updatedAt" timestamp(6) with time zone DEFAULT now() NOT NULL,
+  "workspaceId" bigint NOT NULL,
+  "completedAt" timestamp(6) with time zone NOT NULL,
+  "expiresAt" timestamp(6) with time zone NOT NULL,
+  "attempts" integer NOT NULL,
+  "implementationVersion" text NOT NULL
+);
+CREATE INDEX "MessageCleanupReceipt_expiresAt_idx" ON "MessageCleanupReceipt" ("expiresAt");
+CREATE INDEX "MessageCleanupReceipt_workspaceId_idx" ON "MessageCleanupReceipt" ("workspaceId");

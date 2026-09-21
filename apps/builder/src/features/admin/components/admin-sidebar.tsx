@@ -79,6 +79,11 @@ export function AdminSidebar({
 
   const toolsItems = [
     {
+      title: t("deletionJobs.title"),
+      url: "/admin/deletion-jobs",
+      icon: ListTodoIcon,
+    },
+    {
       title: t("platformAdmin.queues.title"),
       url: "/developer/queues",
       icon: ListTodoIcon,

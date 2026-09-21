@@ -15,6 +15,20 @@ function mockClaims(rows: Claim[], completed: boolean) {
   let selected: Claim | undefined
   const events: string[] = []
   const tx = {
+    delete: vi.fn(() => ({
+      where: () => ({
+        returning: () => {
+          events.push("finish")
+          return Promise.resolve(completed ? [{ workspaceId: "1" }] : [])
+        },
+      }),
+    })),
+    insert: vi.fn(() => ({
+      values: () => {
+        events.push("receipt")
+        return Promise.resolve()
+      },
+    })),
     select: vi.fn(() => ({
       from: () => ({
         where: () => ({
@@ -91,15 +105,17 @@ describe("message cleanup claim ownership", () => {
       "claim:1",
       "purge:1",
       "finish",
+      "receipt",
       "select:2",
       "claim:2",
       "purge:2",
       "finish",
+      "receipt",
     ])
   })
 
   test("does not claim completion after another worker takes the lease", async () => {
-    mockClaims(
+    const events = mockClaims(
       [{ id: "1", attempts: 2, updatedAt: new Date("2026-09-20") }],
       false,
     )
@@ -110,6 +126,7 @@ describe("message cleanup claim ownership", () => {
     const result = await messageCleanupService.processPending({ limit: 1 })
 
     expect(result).toEqual({ processed: 0, failed: 0 })
+    expect(events).not.toContain("receipt")
   })
 
   test("records a purge failure only when it still owns the lease", async () => {
@@ -165,7 +182,7 @@ describe("message cleanup claim ownership", () => {
     expect(updates).toHaveBeenCalledTimes(1)
     finishPurge()
     expect(await resultPromise).toEqual({ processed: 1, failed: 0 })
-    expect(updates).toHaveBeenCalledTimes(2)
+    expect(updates).toHaveBeenCalledTimes(1)
     expect(vi.getTimerCount()).toBe(0)
   })
 })

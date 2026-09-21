@@ -15,6 +15,7 @@ import { messageCleanupStatuses } from "@chatbotx.io/database/partials"
 import {
   attachmentModel,
   messageCleanupModel,
+  messageCleanupReceiptModel,
   messageModel,
 } from "@chatbotx.io/database/schema"
 import type { MessageCleanupModel } from "@chatbotx.io/database/types"
@@ -45,6 +46,8 @@ const MAX_ATTEMPTS = 10
 const FAILED_RETRY_DELAY_MS = 30 * 60 * 1000
 const STALE_PROCESSING_DELAY_MS = 60 * 60 * 1000
 const CLAIM_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000
+const RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+const RECEIPT_IMPLEMENTATION_VERSION = "mbd-erasure-v2"
 
 /**
  * Tracks Message/Attachment rows orphaned by contact deletes.
@@ -205,22 +208,34 @@ class MessageCleanupService extends BaseService {
         )
       try {
         await this.purgeWithHeartbeat(row, claim)
-        const completed = await db
-          .update(messageCleanupModel)
-          .set({
-            status: messageCleanupStatuses.enum.completed,
-            processedAt: new Date(),
-            lastError: null,
+        const completed = await db.transaction(async (tx) => {
+          const [removed] = await tx
+            .delete(messageCleanupModel)
+            .where(ownsClaim())
+            .returning({ workspaceId: messageCleanupModel.workspaceId })
+          if (!removed) {
+            return false
+          }
+          const completedAt = new Date()
+          await tx.insert(messageCleanupReceiptModel).values({
+            workspaceId: removed.workspaceId,
+            completedAt,
+            expiresAt: new Date(completedAt.getTime() + RECEIPT_RETENTION_MS),
+            attempts: row.attempts,
+            implementationVersion: RECEIPT_IMPLEMENTATION_VERSION,
           })
-          .where(ownsClaim())
-          .returning({ id: messageCleanupModel.id })
-        if (completed.length > 0) {
+          return true
+        })
+        if (completed) {
           processed += 1
         }
-      } catch (error) {
+      } catch {
+        // Storage/database errors can embed sender identifiers, object paths,
+        // SQL parameters or credentials. Keep only a stable failure category
+        // and the operational job reference; the queue retains retry selectors.
         logger.error(
           {
-            err: error,
+            errorCategory: "PURGE_FAILED",
             messageCleanupId: row.id,
             workspaceId: row.workspaceId,
           },
@@ -230,7 +245,7 @@ class MessageCleanupService extends BaseService {
           .update(messageCleanupModel)
           .set({
             status: messageCleanupStatuses.enum.failed,
-            lastError: error instanceof Error ? error.message : String(error),
+            lastError: "PURGE_FAILED",
           })
           .where(ownsClaim())
           .returning({ id: messageCleanupModel.id })
@@ -241,6 +256,143 @@ class MessageCleanupService extends BaseService {
     }
 
     return { processed, failed }
+  }
+
+  /** Operator report intentionally excludes sender, conversation and file selectors. */
+  async operatorStatus() {
+    const counts = await db
+      .select({
+        status: messageCleanupModel.status,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(messageCleanupModel)
+      .groupBy(messageCleanupModel.status)
+    const jobs = await db
+      .select({
+        id: messageCleanupModel.id,
+        workspaceId: messageCleanupModel.workspaceId,
+        status: messageCleanupModel.status,
+        attempts: messageCleanupModel.attempts,
+        updatedAt: messageCleanupModel.updatedAt,
+      })
+      .from(messageCleanupModel)
+      .where(
+        or(
+          eq(messageCleanupModel.status, "failed"),
+          and(
+            eq(messageCleanupModel.status, "processing"),
+            lte(
+              messageCleanupModel.updatedAt,
+              new Date(Date.now() - STALE_PROCESSING_DELAY_MS),
+            ),
+          ),
+        ),
+      )
+      .orderBy(asc(messageCleanupModel.updatedAt))
+      .limit(100)
+    return { counts, jobs }
+  }
+
+  /** Operator-only callers must authorize before invoking this service. */
+  async retryExhausted(id: string): Promise<boolean> {
+    const retried = await db
+      .update(messageCleanupModel)
+      .set({
+        status: "pending",
+        attempts: 0,
+        lastError: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(messageCleanupModel.id, id),
+          sql`${messageCleanupModel.attempts} >= ${MAX_ATTEMPTS}`,
+          or(
+            eq(messageCleanupModel.status, "failed"),
+            and(
+              eq(messageCleanupModel.status, "processing"),
+              lte(
+                messageCleanupModel.updatedAt,
+                new Date(Date.now() - STALE_PROCESSING_DELAY_MS),
+              ),
+            ),
+          ),
+        ),
+      )
+      .returning({ id: messageCleanupModel.id })
+    return retried.length === 1
+  }
+
+  /** Bounded maintenance; never discards pending, processing or failed work. */
+  async maintainReceipts(limit = 1000): Promise<{
+    minimized: number
+    expired: number
+    exhausted: number
+  }> {
+    const now = new Date()
+    const minimized = await db.transaction(async (tx) => {
+      const legacy = await tx
+        .select()
+        .from(messageCleanupModel)
+        .where(eq(messageCleanupModel.status, "completed"))
+        .orderBy(asc(messageCleanupModel.id))
+        .limit(limit)
+        .for("update", { skipLocked: true })
+      for (const row of legacy) {
+        const completedAt = row.processedAt ?? row.updatedAt
+        const expiresAt = new Date(completedAt.getTime() + RECEIPT_RETENTION_MS)
+        if (expiresAt > now) {
+          await tx.insert(messageCleanupReceiptModel).values({
+            workspaceId: row.workspaceId,
+            completedAt,
+            expiresAt,
+            attempts: row.attempts,
+            implementationVersion: "mbd-erasure-v1-legacy",
+          })
+        }
+        await tx
+          .delete(messageCleanupModel)
+          .where(eq(messageCleanupModel.id, row.id))
+      }
+      return legacy.length
+    })
+    const expired = await db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ id: messageCleanupReceiptModel.id })
+        .from(messageCleanupReceiptModel)
+        .where(lte(messageCleanupReceiptModel.expiresAt, now))
+        .orderBy(asc(messageCleanupReceiptModel.expiresAt))
+        .limit(limit)
+        .for("update", { skipLocked: true })
+      if (rows.length > 0) {
+        await tx.delete(messageCleanupReceiptModel).where(
+          inArray(
+            messageCleanupReceiptModel.id,
+            rows.map((row) => row.id),
+          ),
+        )
+      }
+      return rows.length
+    })
+    const [result] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(messageCleanupModel)
+      .where(
+        and(
+          sql`${messageCleanupModel.attempts} >= ${MAX_ATTEMPTS}`,
+          or(
+            eq(messageCleanupModel.status, "failed"),
+            and(
+              eq(messageCleanupModel.status, "processing"),
+              lte(
+                messageCleanupModel.updatedAt,
+                new Date(now.getTime() - STALE_PROCESSING_DELAY_MS),
+              ),
+            ),
+          ),
+        ),
+      )
+    return { minimized, expired, exhausted: result?.count ?? 0 }
   }
 
   private async purgeWithHeartbeat(
