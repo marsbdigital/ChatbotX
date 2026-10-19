@@ -3,6 +3,8 @@
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
 const {
+  mockDiagnosticEnabled,
+  mockRunDiagnostic,
   mockFindMessengerIntegration,
   mockUpdateMessengerIntegrationAuth,
   mockFindInstagramIntegration,
@@ -28,6 +30,8 @@ const {
   mockUpdateZaloIntegrationAuth,
   mockZaloHandleRequest,
 } = vi.hoisted(() => ({
+  mockDiagnosticEnabled: vi.fn(),
+  mockRunDiagnostic: vi.fn(),
   mockFindMessengerIntegration: vi.fn(),
   mockUpdateMessengerIntegrationAuth: vi.fn(),
   mockFindInstagramIntegration: vi.fn(),
@@ -53,6 +57,14 @@ const {
   mockUpdateZaloIntegrationAuth: vi.fn(),
   mockZaloHandleRequest: vi.fn(),
 }))
+
+vi.mock(
+  "../src/features/integration-messenger/libs/reconnect-diagnostic",
+  () => ({
+    isMessengerReconnectDiagnostic: mockDiagnosticEnabled,
+    runMessengerReconnectDiagnostic: mockRunDiagnostic,
+  }),
+)
 
 vi.mock("@chatbotx.io/business", () => ({
   resolveTenantSettings: mockResolveTenantSettings,
@@ -101,7 +113,7 @@ vi.mock("@chatbotx.io/sdk", () => ({
 }))
 
 vi.mock("@/lib/log", () => ({
-  logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
 vi.mock("@/integration", () => ({
@@ -197,8 +209,32 @@ const stubLookupIntegrationUserInfo = () => {
 }
 
 describe("reconnectMessengerHandler", () => {
+  test("diagnostic mode returns before every credential, subscription and profile write", async () => {
+    mockDiagnosticEnabled.mockReturnValue(true)
+    mockRunDiagnostic.mockResolvedValue({
+      version: "v25.0",
+      pages: { values: [{ id: "1002", tokenPresent: true }] },
+    })
+    expect(
+      await reconnectMessengerHandler({
+        credentialConfig,
+        workspaceId: "ws-1",
+        integrationId: "im-1",
+        code: "diagnostic-code",
+        callbackUrl: "https://example.test/callback",
+      }),
+    ).toEqual({ status: "error", reason: "failed" })
+    expect(mockRunDiagnostic).toHaveBeenCalledTimes(1)
+    expect(mockExchangeMessengerCode).not.toHaveBeenCalled()
+    expect(mockGetUserPages).not.toHaveBeenCalled()
+    expect(mockUpdateMessengerIntegrationAuth).not.toHaveBeenCalled()
+    expect(mockSubscribePageToAppWebhook).not.toHaveBeenCalled()
+    expect(mockEnsureMessengerWhitelistedDomain).not.toHaveBeenCalled()
+    expect(mockLookupIntegrationUserInfo).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
+    mockDiagnosticEnabled.mockReturnValue(false)
     mockFindMessengerIntegration.mockResolvedValue({
       id: "im-1",
       pageId: "page-1",

@@ -21,7 +21,7 @@ jobs:
           import subprocess
           base = '54c1287b788d07082b9a1456e1b511dee2661adb'
           subprocess.run(['git','merge-base','--is-ancestor',base,'HEAD'],check=True)
-          allowed = {'integrations/messenger/src/apis/auth.ts','integrations/messenger/__tests__/generate-auth-url.test.ts','.github/workflows/messenger-scope-candidate.yml','apps/builder/src/lib/oauth-referer.ts','apps/builder/__tests__/oauth-referer-auth-origin.test.ts'}
+          allowed = {'integrations/messenger/src/apis/auth.ts','integrations/messenger/__tests__/generate-auth-url.test.ts','.github/workflows/messenger-scope-candidate.yml','apps/builder/src/lib/oauth-referer.ts','apps/builder/__tests__/oauth-referer-auth-origin.test.ts','apps/builder/src/features/integration-messenger/actions/reconnect-callback.ts','apps/builder/src/features/integration-messenger/libs/reconnect-diagnostic.ts','apps/builder/__tests__/messenger-reconnect-diagnostic.test.ts','apps/builder/__tests__/channel-reconnect-handlers.test.ts'}
           changed = set(subprocess.check_output(['git','diff','--name-only',base,'HEAD'],text=True).splitlines())
           assert changed == allowed, 'Unexpected candidate scope'
           subprocess.run(['git','diff','--check',base,'HEAD'],check=True)
@@ -43,7 +43,7 @@ jobs:
       - name: Builder origin security gates
         run: |
           pnpm --filter builder check-types
-          pnpm --filter builder exec vitest run __tests__/oauth-referer-auth-origin.test.ts --maxWorkers 2 --coverage --coverage.include=src/lib/oauth-referer.ts
+          pnpm --filter builder exec vitest run __tests__/oauth-referer-auth-origin.test.ts __tests__/messenger-reconnect-diagnostic.test.ts __tests__/channel-reconnect-handlers.test.ts __tests__/oauth-reconnect-callback.test.ts --maxWorkers 2 --coverage --coverage.include=src/lib/oauth-referer.ts --coverage.include=src/features/integration-messenger/libs/reconnect-diagnostic.ts
       - name: Validate synthetic runtime configuration
         run: |
           pnpm exec tsx --tsconfig apps/builder/tsconfig.json -e '

@@ -21,6 +21,10 @@ import { normalizeError } from "universal-error-normalizer"
 import type { ReconnectResult } from "@/lib/channel-reconnect"
 import { lookupIntegrationUserInfo } from "@/lib/integration-user-info"
 import { logger } from "@/lib/log"
+import {
+  isMessengerReconnectDiagnostic,
+  runMessengerReconnectDiagnostic,
+} from "../libs/reconnect-diagnostic"
 
 /**
  * Complete an OAuth reconnect for an existing Messenger integration: the user
@@ -43,6 +47,19 @@ export async function reconnectMessengerHandler(props: {
     })
   if (!integrationMessenger) {
     return { status: "error", reason: "notFound" }
+  }
+
+  if (isMessengerReconnectDiagnostic(props.integrationId)) {
+    const diagnostic = await runMessengerReconnectDiagnostic({
+      credentialConfig: props.credentialConfig,
+      code: props.code,
+      callbackUrl: props.callbackUrl,
+      pageId: integrationMessenger.pageId,
+    })
+    logger.info({ diagnostic }, "Messenger reconnect read-only diagnostic")
+    // Deliberate dry run: no credential, profile or subscription writes, even
+    // when a usable Page token is returned. Do not enter the normal path.
+    return { status: "error", reason: "failed" }
   }
 
   try {
