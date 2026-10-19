@@ -82,7 +82,7 @@ jobs:
             -t "scope-candidate:$GITHUB_SHA" "$RUNNER_TEMP/scope-context"
       - name: Isolated runtime health and route smoke
         run: |
-          docker run -d --name scope-smoke --network none --memory 2g --cpus 2 \
+          docker run -d --name scope-smoke --network none --memory 4g --cpus 2 \
             -e HOSTNAME=0.0.0.0 -e PORT=3000 \
             -e RUN_DB_MIGRATE=false -e RUN_DB_SEED=false \
             -e DATABASE_URL=postgresql://synthetic@127.0.0.1:1 \
@@ -90,6 +90,10 @@ jobs:
             -e BETTER_AUTH_URL=http://localhost:3000 \
             -e BETTER_AUTH_SECRET=synthetic-smoke-secret-at-least-32-characters \
             -e REALTIME_BROADCAST_SECRET=synthetic-broadcast-secret-at-least-32-characters \
+            -e ENCRYPTION_KEY="$(printf '%064d' 0)" \
+            -e JAVASCRIPT_EXECUTOR_URL=http://127.0.0.1:1 \
+            -e JAVASCRIPT_EXECUTOR_TOKEN=synthetic-executor-token-at-least-32-characters \
+            -e SMTP_SERVER=smtp://127.0.0.1:1 \
             -e SMTP_FROM=smoke@example.invalid \
             -e NEXT_PUBLIC_BUILDER_URL=http://localhost:3000 \
             -e MESSENGER_OAUTH_MESSAGING_ONLY_APP_IDS=approved-app \
@@ -99,7 +103,7 @@ jobs:
           const origin='http://127.0.0.1:3000';
           (async()=>{
             let ready=false;
-            for(let i=0;i<30;i++){
+            for(let i=0;i<120;i++){
               try{const r=await fetch(origin+'/api/health',{signal:AbortSignal.timeout(2000)});if(r.status===200){const b=await r.json();assert.equal(b.status,'healthy');assert.equal(b.service,'builder');ready=true;break}}catch{}
               await new Promise(r=>setTimeout(r,1000));
             }
@@ -127,5 +131,6 @@ jobs:
         run: |
           if [ -n "${MEMORY_MONITOR_PID:-}" ]; then kill "$MEMORY_MONITOR_PID" || true; fi
           tail -n 30 "$RUNNER_TEMP/memory.log" || true
-          docker logs --tail 40 scope-smoke 2>/dev/null || true
+          docker inspect --format '{{json .State}}' scope-smoke || true
+          docker logs --tail 80 scope-smoke || true
           docker rm -f scope-smoke 2>/dev/null || true
