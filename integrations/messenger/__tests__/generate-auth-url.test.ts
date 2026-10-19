@@ -26,8 +26,7 @@ describe("generateAuthUrl", () => {
       generateAuthUrl({
         clientId: "approved-app",
         version: "v25.0",
-        redirectUrl:
-          "https://example.com/integrations/messenger/callback",
+        redirectUrl: "https://example.com/integrations/messenger/callback",
         stateParams: {
           workspaceId: "10000000000000001",
           reconnectIntegrationId: "10000000000000002",
