@@ -40,6 +40,17 @@ jobs:
         run: |
           pnpm --filter @chatbotx.io/integration-messenger check-types
           pnpm --filter @chatbotx.io/integration-messenger exec vitest run --maxWorkers 2
+      - name: Validate synthetic runtime configuration
+        run: |
+          pnpm exec tsx --tsconfig apps/builder/tsconfig.json -e '
+            (async()=>{
+              await import("./packages/vitest-config/src/setup-env.ts");
+              const {execFileSync}=await import("node:child_process");
+              const files=execFileSync("git",["ls-files"],{encoding:"utf8"}).split("\n").filter(p=>p.startsWith("packages/")&&p.endsWith("/keys.ts"));
+              for(const file of files){const m=await import("./"+file);for(const name of ["keys","integrationContextEnv","javascriptExecutionEnv"]){if(typeof m[name]==="function")m[name]();}}
+              await import("./apps/builder/src/env.ts");
+              console.log("Synthetic runtime environment validators passed");
+            })().catch(e=>{console.error(e.message);process.exitCode=1});'
   candidate:
     needs: verify
     runs-on: ubuntu-24.04
@@ -96,22 +107,19 @@ jobs:
             sleep 1
           done
           docker exec scope-redis redis-cli ping | grep -q PONG
+          node --experimental-strip-types --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const before=new Set(Object.keys(process.env));
+          await import('./packages/vitest-config/src/setup-env.ts');
+          const added=Object.keys(process.env).filter(k=>!before.has(k));
+          const overrides={HOSTNAME:'0.0.0.0',PORT:'3000',RUN_DB_MIGRATE:'false',RUN_DB_SEED:'false',DATABASE_DEBUG:'false',REDIS_URL:'redis://scope-redis:6379',BETTER_AUTH_URL:'http://localhost:3000',NEXT_PUBLIC_BUILDER_URL:'http://localhost:3000',MESSENGER_OAUTH_MESSAGING_ONLY_APP_IDS:'approved-app'};
+          Object.assign(process.env,overrides);
+          const keys=[...new Set([...added,...Object.keys(overrides)])];
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/scope-runtime.env',keys.map(k=>k+'='+process.env[k]).join('\n')+'\n',{mode:0o600});
+          console.log('Generated synthetic-only runtime fixture outside the build context');
+          JS
           docker run -d --name scope-smoke --network scope-smoke-net --memory 4g --cpus 2 \
-            -e HOSTNAME=0.0.0.0 -e PORT=3000 \
-            -e RUN_DB_MIGRATE=false -e RUN_DB_SEED=false \
-            -e DATABASE_URL=postgresql://synthetic@127.0.0.1:1 \
-            -e REDIS_URL=redis://scope-redis:6379 \
-            -e BETTER_AUTH_URL=http://localhost:3000 \
-            -e BETTER_AUTH_SECRET=synthetic-smoke-secret-at-least-32-characters \
-            -e REALTIME_BROADCAST_SECRET=synthetic-broadcast-secret-at-least-32-characters \
-            -e ENCRYPTION_KEY="$(printf '%064d' 0)" \
-            -e JAVASCRIPT_EXECUTOR_URL=http://127.0.0.1:1 \
-            -e JAVASCRIPT_EXECUTOR_TOKEN=synthetic-executor-token-at-least-32-characters \
-            -e SMTP_SERVER=smtp://127.0.0.1:1 \
-            -e SMTP_FROM=smoke@example.invalid \
-            -e NEXT_PUBLIC_BUILDER_URL=http://localhost:3000 \
-            -e MESSENGER_OAUTH_MESSAGING_ONLY_APP_IDS=approved-app \
-            "scope-candidate:$GITHUB_SHA"
+            --env-file "$RUNNER_TEMP/scope-runtime.env" "scope-candidate:$GITHUB_SHA"
           docker exec -i scope-smoke node <<'JS'
           const assert=require('node:assert/strict');
           const origin='http://127.0.0.1:3000';
@@ -146,6 +154,6 @@ jobs:
           if [ -n "${MEMORY_MONITOR_PID:-}" ]; then kill "$MEMORY_MONITOR_PID" || true; fi
           tail -n 30 "$RUNNER_TEMP/memory.log" || true
           docker inspect --format '{{json .State}}' scope-smoke || true
-          docker logs --tail 80 scope-smoke || true
+          docker logs scope-smoke || true
           docker rm -f scope-smoke scope-redis 2>/dev/null || true
           docker network rm scope-smoke-net 2>/dev/null || true
