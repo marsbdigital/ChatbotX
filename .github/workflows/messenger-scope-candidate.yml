@@ -21,7 +21,7 @@ jobs:
           import subprocess
           base = '54c1287b788d07082b9a1456e1b511dee2661adb'
           subprocess.run(['git','merge-base','--is-ancestor',base,'HEAD'],check=True)
-          allowed = {'integrations/messenger/src/apis/auth.ts','integrations/messenger/__tests__/generate-auth-url.test.ts','.github/workflows/messenger-scope-candidate.yml'}
+          allowed = {'integrations/messenger/src/apis/auth.ts','integrations/messenger/__tests__/generate-auth-url.test.ts','.github/workflows/messenger-scope-candidate.yml','apps/builder/src/lib/oauth-referer.ts','apps/builder/__tests__/oauth-referer-auth-origin.test.ts'}
           changed = set(subprocess.check_output(['git','diff','--name-only',base,'HEAD'],text=True).splitlines())
           assert changed == allowed, 'Unexpected candidate scope'
           subprocess.run(['git','diff','--check',base,'HEAD'],check=True)
@@ -40,6 +40,10 @@ jobs:
         run: |
           pnpm --filter @chatbotx.io/integration-messenger check-types
           pnpm --filter @chatbotx.io/integration-messenger exec vitest run --maxWorkers 2
+      - name: Builder origin security gates
+        run: |
+          pnpm --filter builder check-types
+          pnpm --filter builder exec vitest run __tests__/oauth-referer-auth-origin.test.ts --maxWorkers 2 --coverage --coverage.include=src/lib/oauth-referer.ts
       - name: Validate synthetic runtime configuration
         run: |
           pnpm exec tsx --tsconfig apps/builder/tsconfig.json -e '
