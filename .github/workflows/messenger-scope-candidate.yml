@@ -1,0 +1,131 @@
+name: Messenger scope candidate
+on:
+  push:
+    branches: [fix/messenger-approved-scopes-candidate-20261019]
+permissions:
+  contents: read
+concurrency:
+  group: messenger-scope-candidate-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact base and allowed diff
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          base = '54c1287b788d07082b9a1456e1b511dee2661adb'
+          subprocess.run(['git','merge-base','--is-ancestor',base,'HEAD'],check=True)
+          allowed = {'integrations/messenger/src/apis/auth.ts','integrations/messenger/__tests__/generate-auth-url.test.ts','.github/workflows/messenger-scope-candidate.yml'}
+          changed = set(subprocess.check_output(['git','diff','--name-only',base,'HEAD'],text=True).splitlines())
+          assert changed == allowed, 'Unexpected candidate scope'
+          subprocess.run(['git','diff','--check',base,'HEAD'],check=True)
+          PY
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Lint and instruction checks
+        run: |
+          pnpm check:agent-instructions
+          pnpm --filter builder lint
+          pnpm exec biome check .
+      - name: Messenger type and regression gates
+        run: |
+          pnpm --filter @chatbotx.io/integration-messenger check-types
+          pnpm --filter @chatbotx.io/integration-messenger exec vitest run --maxWorkers 2
+  candidate:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare tracked-only source context
+        run: |
+          mkdir -p "$RUNNER_TEMP/scope-context"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/scope-context"
+          python3 - <<'PY'
+          import os,pathlib
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'scope-context'
+          for p in root.rglob('*'):
+            if p.is_file() and (p.name=='.env' or p.name.startswith('.env.')):
+              p.unlink()
+          assert not (root/'.git').exists()
+          forbidden={'.secrets','node_modules','.next','.turbo','docker-data'}
+          assert not any(p.name in forbidden for p in root.rglob('*'))
+          PY
+          free -h
+          df -h "$RUNNER_TEMP"
+          uname -m
+      - uses: docker/setup-buildx-action@v3
+      - name: Monitor runner memory
+        run: |
+          (while true; do date -u; free -m; sleep 15; done) > "$RUNNER_TEMP/memory.log" &
+          echo "MEMORY_MONITOR_PID=$!" >> "$GITHUB_ENV"
+      - name: Build only the candidate runtime
+        run: |
+          docker buildx build --load --platform linux/amd64 --progress=plain \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
+            -f "$RUNNER_TEMP/scope-context/apps/builder/docker/Dockerfile" \
+            -t "scope-candidate:$GITHUB_SHA" "$RUNNER_TEMP/scope-context"
+      - name: Isolated runtime health and route smoke
+        run: |
+          docker run -d --name scope-smoke --network none --memory 2g --cpus 2 \
+            -e HOSTNAME=0.0.0.0 -e PORT=3000 \
+            -e RUN_DB_MIGRATE=false -e RUN_DB_SEED=false \
+            -e DATABASE_URL=postgresql://synthetic@127.0.0.1:1 \
+            -e REDIS_URL=redis://127.0.0.1:1 \
+            -e BETTER_AUTH_URL=http://localhost:3000 \
+            -e BETTER_AUTH_SECRET=synthetic-smoke-secret-at-least-32-characters \
+            -e REALTIME_BROADCAST_SECRET=synthetic-broadcast-secret-at-least-32-characters \
+            -e SMTP_FROM=smoke@example.invalid \
+            -e NEXT_PUBLIC_BUILDER_URL=http://localhost:3000 \
+            -e MESSENGER_OAUTH_MESSAGING_ONLY_APP_IDS=approved-app \
+            "scope-candidate:$GITHUB_SHA"
+          docker exec -i scope-smoke node <<'JS'
+          const assert=require('node:assert/strict');
+          const origin='http://127.0.0.1:3000';
+          (async()=>{
+            let ready=false;
+            for(let i=0;i<30;i++){
+              try{const r=await fetch(origin+'/api/health',{signal:AbortSignal.timeout(2000)});if(r.status===200){const b=await r.json();assert.equal(b.status,'healthy');assert.equal(b.service,'builder');ready=true;break}}catch{}
+              await new Promise(r=>setTimeout(r,1000));
+            }
+            assert(ready,'Runtime failed to become healthy');
+            const cases=[['/',307],['/integrations/messenger/callback',404],['/integrations/instagram-facebook/callback',404],['/integrations/unknown/callback',404]];
+            for(const [path,expected] of cases){const r=await fetch(origin+path,{redirect:'manual',signal:AbortSignal.timeout(10000)});assert.equal(r.status,expected,path);if(path==='/')assert(r.headers.get('location').includes('/auth/sign-in'));console.log(JSON.stringify({path,status:r.status}));}
+            console.log('Isolated health and fail-closed callback smoke passed; no provider or database access');
+          })().catch(e=>{console.error(e.message);process.exitCode=1});
+          JS
+      - name: Log in to existing container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish unique candidate only
+        run: |
+          image="ghcr.io/marsbdigital/chatbotx-review-builder:scope-candidate-$GITHUB_SHA"
+          docker tag "scope-candidate:$GITHUB_SHA" "$image"
+          docker push "$image"
+          docker buildx imagetools inspect "$image" >> "$GITHUB_STEP_SUMMARY"
+          printf '\nCandidate revision: %s\nRuntime smoke: passed\nNo deployment performed.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Diagnostic summary and cleanup
+        if: always()
+        run: |
+          if [ -n "${MEMORY_MONITOR_PID:-}" ]; then kill "$MEMORY_MONITOR_PID" || true; fi
+          tail -n 30 "$RUNNER_TEMP/memory.log" || true
+          docker logs --tail 40 scope-smoke 2>/dev/null || true
+          docker rm -f scope-smoke 2>/dev/null || true

@@ -185,6 +185,25 @@ export const MESSENGER_SCOPES = [
   "page_events",
 ]
 
+/** App-specific opt-in for Messenger apps approved for messaging only. */
+export const MESSENGER_MESSAGING_ONLY_SCOPES = [
+  "pages_manage_metadata",
+  "pages_messaging",
+  "pages_show_list",
+  "business_management",
+]
+
+function getMessengerOAuthScopes(clientId: string): string[] {
+  const messagingOnlyApps =
+    process.env.MESSENGER_OAUTH_MESSAGING_ONLY_APP_IDS?.split(",").map((id) =>
+      id.trim(),
+    ) ?? []
+
+  return messagingOnlyApps.includes(clientId)
+    ? MESSENGER_MESSAGING_ONLY_SCOPES
+    : MESSENGER_SCOPES
+}
+
 /**
  * `MESSENGER_SCOPES` minus the two identity-only scopes (`email`,
  * `public_profile` are not Graph permissions and are implicitly present on
@@ -228,7 +247,7 @@ export function generateAuthUrl({
     auth_type: "rerequest",
     client_id: clientId,
     redirect_uri: redirectUrl,
-    scope: MESSENGER_SCOPES.join(","),
+    scope: getMessengerOAuthScopes(clientId).join(","),
     response_type: "code",
     state: Buffer.from(JSON.stringify(stateParams ?? {})).toString("base64"),
   })
