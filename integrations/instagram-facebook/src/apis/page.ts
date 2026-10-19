@@ -16,6 +16,7 @@ import type {
   InstagramSendMessageRequest,
   InstagramSendMessageResponse,
 } from "../schemas"
+import { hasPageSubscriptionForApp } from "./page-subscription"
 
 export const INSTAGRAM_SUBSCRIBE_FIELDS = [
   "messages",
@@ -81,6 +82,7 @@ export const getInstagramProfilePictureUrl = async (props: {
 }
 
 export const subscribePageToInstagramWebhook = (props: {
+  clientId: string
   pageId: string
   accessToken: string
   version?: string
@@ -90,6 +92,16 @@ export const subscribePageToInstagramWebhook = (props: {
   const subscribedFields = INSTAGRAM_SUBSCRIBE_FIELDS.join(",")
 
   return rescue(endpoint, async () => {
+    if (
+      await hasPageSubscriptionForApp({
+        endpoint,
+        clientId: props.clientId,
+        accessToken: props.accessToken,
+        get: (path, options) => instagramGraphClient.get(path, options),
+      })
+    ) {
+      return
+    }
     const res = await instagramGraphClient.post<{ success?: boolean }>(
       endpoint,
       {

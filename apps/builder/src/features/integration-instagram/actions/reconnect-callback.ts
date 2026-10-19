@@ -171,6 +171,7 @@ export async function reconnectInstagramFacebookHandler(props: {
     })
 
     await subscribeFacebookPageToInstagramWebhook({
+      clientId: props.credentialConfig.clientId,
       pageId: account.pageId,
       accessToken: account.pageAccessToken,
       version: props.credentialConfig.version,

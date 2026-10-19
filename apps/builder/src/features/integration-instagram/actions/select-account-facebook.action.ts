@@ -183,6 +183,7 @@ export const selectFacebookAccountAction = authActionClient
         }
 
         await subscribePageToInstagramWebhook({
+          clientId: instagramSettings.clientId,
           pageId: parsedInput.pageId,
           accessToken: parsedInput.pageAccessToken,
           version: parsedInput.version ?? instagramSettings.version,

@@ -627,6 +627,7 @@ describe("reconnectInstagramFacebookHandler", () => {
 
     expect(result).toEqual({ status: "success" })
     expect(mockSubscribeInstagramFacebookWebhook).toHaveBeenCalledWith({
+      clientId: credentialConfig.clientId,
       pageId: "new-page",
       accessToken: "page-access-token",
       version: "v23.0",
