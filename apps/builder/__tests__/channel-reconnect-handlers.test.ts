@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
 const {
+  mockRestrictedPage,
   mockDiagnosticEnabled,
   mockRunDiagnostic,
   mockFindMessengerIntegration,
@@ -30,6 +31,7 @@ const {
   mockUpdateZaloIntegrationAuth,
   mockZaloHandleRequest,
 } = vi.hoisted(() => ({
+  mockRestrictedPage: vi.fn(),
   mockDiagnosticEnabled: vi.fn(),
   mockRunDiagnostic: vi.fn(),
   mockFindMessengerIntegration: vi.fn(),
@@ -64,6 +66,11 @@ vi.mock(
     isMessengerReconnectDiagnostic: mockDiagnosticEnabled,
     runMessengerReconnectDiagnostic: mockRunDiagnostic,
   }),
+)
+
+vi.mock(
+  "../src/features/integration-messenger/libs/restricted-owned-page",
+  () => ({ findRestrictedOwnedPage: mockRestrictedPage }),
 )
 
 vi.mock("@chatbotx.io/business", () => ({
@@ -235,6 +242,7 @@ describe("reconnectMessengerHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockDiagnosticEnabled.mockReturnValue(false)
+    mockRestrictedPage.mockResolvedValue({})
     mockFindMessengerIntegration.mockResolvedValue({
       id: "im-1",
       pageId: "page-1",
@@ -277,10 +285,52 @@ describe("reconnectMessengerHandler", () => {
       callbackUrl: "https://broker.example.com/integrations/messenger/callback",
     })
 
+  test("uses restricted lookup only when the stored Page is missing from direct results", async () => {
+    mockGetUserPages.mockResolvedValue({ pages: [], bmLookupFailed: false })
+    mockRestrictedPage.mockResolvedValue({
+      page: {
+        id: "page-1",
+        name: "Page One",
+        access_token: "restricted-token",
+        isConnectable: true,
+      },
+    })
+    expect(await executeReconnect()).toEqual({ status: "success" })
+    expect(mockRestrictedPage).toHaveBeenCalledWith({
+      integrationId: "im-1",
+      workspaceId: "ws-1",
+      pageId: "page-1",
+      appId: "client-1",
+      userToken: "long-short-token",
+      version: "v23.0",
+    })
+    expect(mockUpdateMessengerIntegrationAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "im-1",
+        workspaceId: "ws-1",
+        auth: expect.objectContaining({
+          metadata: expect.objectContaining({ pageId: "page-1" }),
+        }),
+      }),
+    )
+  })
+
+  test("does not write or subscribe when restricted lookup rejects the token", async () => {
+    mockGetUserPages.mockResolvedValue({ pages: [], bmLookupFailed: false })
+    mockRestrictedPage.mockResolvedValue({ failure: "pageIdentityMismatch" })
+    expect(await executeReconnect()).toEqual({
+      status: "error",
+      reason: "pageNotFound",
+    })
+    expect(mockUpdateMessengerIntegrationAuth).not.toHaveBeenCalled()
+    expect(mockSubscribePageToAppWebhook).not.toHaveBeenCalled()
+  })
+
   test("stores the matched page's long-lived token and preserves the pageId", async () => {
     const result = await executeReconnect()
 
     expect(result).toEqual({ status: "success" })
+    expect(mockRestrictedPage).not.toHaveBeenCalled()
     expect(mockSubscribePageToAppWebhook).toHaveBeenCalledWith({
       pageId: "page-1",
       accessToken: "long-page-token",

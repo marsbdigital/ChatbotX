@@ -25,6 +25,7 @@ import {
   isMessengerReconnectDiagnostic,
   runMessengerReconnectDiagnostic,
 } from "../libs/reconnect-diagnostic"
+import { findRestrictedOwnedPage } from "../libs/restricted-owned-page"
 
 /**
  * Complete an OAuth reconnect for an existing Messenger integration: the user
@@ -83,10 +84,31 @@ export async function reconnectMessengerHandler(props: {
       userToken,
       props.credentialConfig.version,
     )
-    const page = pages.find(
+    let page = pages.find(
       (userPage) =>
         userPage.id === integrationMessenger.pageId && userPage.access_token,
     )
+    if (!page?.access_token) {
+      const lookup = await findRestrictedOwnedPage({
+        integrationId: integrationMessenger.id,
+        workspaceId: props.workspaceId,
+        pageId: integrationMessenger.pageId,
+        appId: props.credentialConfig.clientId,
+        userToken,
+        version: props.credentialConfig.version,
+      })
+      page = lookup.page
+      if (lookup.failure) {
+        logger.warn(
+          {
+            failure: lookup.failure,
+            code: lookup.code,
+            httpStatus: lookup.httpStatus,
+          },
+          "Restricted Messenger Page lookup failed",
+        )
+      }
+    }
     if (!page?.access_token) {
       return { status: "error", reason: "pageNotFound" }
     }
