@@ -15,6 +15,7 @@ const props = {
   workspaceId: "1002",
   pageId: "1003",
   appId: "1004",
+  appSecret: "synthetic-app-secret",
   version: "v25.0",
   userToken: "synthetic-user-token",
 }
@@ -39,7 +40,14 @@ beforeEach(() => {
         response(
           url.pathname.endsWith("owned_pages")
             ? { data: [page] }
-            : { id: "1003" },
+            : {
+                data: {
+                  app_id: "1004",
+                  type: "PAGE",
+                  is_valid: true,
+                  profile_id: "1003",
+                },
+              },
         ),
     )
   })
@@ -56,7 +64,7 @@ describe("exact stored-Page owned-business reconnect lookup", () => {
     })
     expect(fetchMock.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
       "/v25.0/1005/owned_pages",
-      "/v25.0/me",
+      "/v25.0/debug_token",
     ])
     expect(fetchMock.mock.calls[0][1]).toMatchObject({
       method: "GET",
@@ -65,7 +73,7 @@ describe("exact stored-Page owned-business reconnect lookup", () => {
       redirect: "error",
     })
     expect(fetchMock.mock.calls[1][1].headers).toEqual({
-      Authorization: "Bearer synthetic-page-token",
+      Authorization: "Bearer 1004|synthetic-app-secret",
     })
     expect(new URL(fetchMock.mock.calls[0][0]).searchParams.get("fields")).toBe(
       "id,name,access_token",
@@ -121,13 +129,22 @@ describe("exact stored-Page owned-business reconnect lookup", () => {
       failure: "pageTokenMissing",
     })
   })
-  it("rejects a token belonging to a different Page", async () => {
+  it.each([
+    { app_id: "1004", type: "PAGE", is_valid: true, profile_id: "9999" },
+    { app_id: "9999", type: "PAGE", is_valid: true, profile_id: "1003" },
+    { app_id: "1004", type: "USER", is_valid: true, profile_id: "1003" },
+    { app_id: "1004", type: "PAGE", is_valid: false, profile_id: "1003" },
+    null,
+  ])("rejects an invalid, wrong-app, wrong-type or wrong-Page token", async (identity) => {
     replace = (url) =>
-      url.pathname.endsWith("/me") ? response({ id: "9999" }) : undefined
+      url.pathname.endsWith("/debug_token")
+        ? response({ data: identity })
+        : undefined
     expect(await findRestrictedOwnedPage(props)).toEqual({
       failure: "pageIdentityMismatch",
     })
   })
+
   it("paginates only the configured business, ignores upstream URLs, and stops at the match", async () => {
     replace = (url) =>
       url.pathname.endsWith("owned_pages") && !url.searchParams.has("after")

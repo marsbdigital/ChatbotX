@@ -94,6 +94,7 @@ export async function reconnectMessengerHandler(props: {
         workspaceId: props.workspaceId,
         pageId: integrationMessenger.pageId,
         appId: props.credentialConfig.clientId,
+        appSecret: props.credentialConfig.clientSecret,
         userToken,
         version: props.credentialConfig.version,
       })

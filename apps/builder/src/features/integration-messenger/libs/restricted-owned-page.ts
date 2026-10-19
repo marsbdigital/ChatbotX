@@ -57,6 +57,7 @@ export async function findRestrictedOwnedPage(props: {
   workspaceId: string
   pageId: string
   appId: string
+  appSecret: string
   userToken: string
   version: string
 }): Promise<LookupResult> {
@@ -133,8 +134,20 @@ export async function findRestrictedOwnedPage(props: {
         ) {
           return { failure: "pageTokenMissing" }
         }
-        const identity = await get("me", match.access_token, { fields: "id" })
-        if (identity.id !== props.pageId) {
+        const debug = await get(
+          "debug_token",
+          `${props.appId}|${props.appSecret}`,
+          {
+            input_token: match.access_token,
+          },
+        )
+        const identity = object(debug.data)
+        if (
+          identity.is_valid !== true ||
+          identity.type !== "PAGE" ||
+          identity.app_id !== props.appId ||
+          identity.profile_id !== props.pageId
+        ) {
           return { failure: "pageIdentityMismatch" }
         }
         return {

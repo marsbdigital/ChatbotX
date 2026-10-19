@@ -301,6 +301,7 @@ describe("reconnectMessengerHandler", () => {
       workspaceId: "ws-1",
       pageId: "page-1",
       appId: "client-1",
+      appSecret: "secret-1",
       userToken: "long-short-token",
       version: "v23.0",
     })
