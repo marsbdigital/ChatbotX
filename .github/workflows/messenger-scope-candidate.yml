@@ -74,19 +74,33 @@ jobs:
           (while true; do date -u; free -m; sleep 15; done) > "$RUNNER_TEMP/memory.log" &
           echo "MEMORY_MONITOR_PID=$!" >> "$GITHUB_ENV"
       - name: Build only the candidate runtime
-        run: |
-          docker buildx build --load --platform linux/amd64 --progress=plain \
-            --label org.opencontainers.image.revision="$GITHUB_SHA" \
-            --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
-            -f "$RUNNER_TEMP/scope-context/apps/builder/docker/Dockerfile" \
-            -t "scope-candidate:$GITHUB_SHA" "$RUNNER_TEMP/scope-context"
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/scope-context
+          file: ${{ runner.temp }}/scope-context/apps/builder/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: scope-candidate:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=messenger-scope-candidate
+          cache-to: type=gha,scope=messenger-scope-candidate,mode=min
       - name: Isolated runtime health and route smoke
         run: |
-          docker run -d --name scope-smoke --network none --memory 4g --cpus 2 \
+          docker network create --internal scope-smoke-net
+          docker run -d --name scope-redis --network scope-smoke-net --memory 128m --cpus 1 redis:7-alpine redis-server --save "" --appendonly no
+          for i in $(seq 1 20); do
+            if docker exec scope-redis redis-cli ping | grep -q PONG; then break; fi
+            sleep 1
+          done
+          docker exec scope-redis redis-cli ping | grep -q PONG
+          docker run -d --name scope-smoke --network scope-smoke-net --memory 4g --cpus 2 \
             -e HOSTNAME=0.0.0.0 -e PORT=3000 \
             -e RUN_DB_MIGRATE=false -e RUN_DB_SEED=false \
             -e DATABASE_URL=postgresql://synthetic@127.0.0.1:1 \
-            -e REDIS_URL=redis://127.0.0.1:1 \
+            -e REDIS_URL=redis://scope-redis:6379 \
             -e BETTER_AUTH_URL=http://localhost:3000 \
             -e BETTER_AUTH_SECRET=synthetic-smoke-secret-at-least-32-characters \
             -e REALTIME_BROADCAST_SECRET=synthetic-broadcast-secret-at-least-32-characters \
@@ -110,7 +124,7 @@ jobs:
             assert(ready,'Runtime failed to become healthy');
             const cases=[['/',307],['/integrations/messenger/callback',404],['/integrations/instagram-facebook/callback',404],['/integrations/unknown/callback',404]];
             for(const [path,expected] of cases){const r=await fetch(origin+path,{redirect:'manual',signal:AbortSignal.timeout(10000)});assert.equal(r.status,expected,path);if(path==='/')assert(r.headers.get('location').includes('/auth/sign-in'));console.log(JSON.stringify({path,status:r.status}));}
-            console.log('Isolated health and fail-closed callback smoke passed; no provider or database access');
+            console.log('Isolated health and fail-closed callback smoke passed; no external provider or database access');
           })().catch(e=>{console.error(e.message);process.exitCode=1});
           JS
       - name: Log in to existing container registry
@@ -133,4 +147,5 @@ jobs:
           tail -n 30 "$RUNNER_TEMP/memory.log" || true
           docker inspect --format '{{json .State}}' scope-smoke || true
           docker logs --tail 80 scope-smoke || true
-          docker rm -f scope-smoke 2>/dev/null || true
+          docker rm -f scope-smoke scope-redis 2>/dev/null || true
+          docker network rm scope-smoke-net 2>/dev/null || true
